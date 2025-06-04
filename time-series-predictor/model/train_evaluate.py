@@ -3,11 +3,11 @@
 Demo of the minimal train and evaluation framework
 """
 
-from model.framework import TimeSeriesFramework
+from framework import TimeSeriesFramework
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 
-def demo():
+def train_evaluate():
     """
     Demo: Plug different predictors into the framework
     """
@@ -22,7 +22,7 @@ def demo():
     train_result = framework_lr.train()
     print(f"   Trained on {train_result['train_samples']} samples")
     
-    eval_result = framework_lr.evaluate()
+    eval_result = framework_lr.evaluate(data_path='~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv', K=3)
     print(f"   MAE: {eval_result['mae']:.3f}")
     print(f"   RMSE: {eval_result['rmse']:.3f}")
     print(f"   SMAPE: {eval_result['smape']:.1f}%")
@@ -36,7 +36,7 @@ def demo():
     train_result = framework_rf.train()
     print(f"   Trained on {train_result['train_samples']} samples")
     
-    eval_result = framework_rf.evaluate()
+    eval_result = framework_rf.evaluate(data_path='~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv', K=3)
     print(f"   MAE: {eval_result['mae']:.3f}")
     print(f"   RMSE: {eval_result['rmse']:.3f}")
     print(f"   SMAPE: {eval_result['smape']:.1f}%")
@@ -45,4 +45,4 @@ def demo():
     print("✅ Framework allows plugging any predictor with fit/predict methods")
 
 if __name__ == "__main__":
-    demo() 
+    train_evaluate() 

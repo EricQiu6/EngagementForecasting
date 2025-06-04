@@ -5,7 +5,13 @@ Minimal train and evaluation framework for time series predictors
 
 import pandas as pd
 import numpy as np
-from data.data_processing import split_chronologically
+import sys
+import os
+
+# Add the parent directory to Python path so we can import data_processing
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'data'))
+
+from data_processing import split_chronologically
 
 class TimeSeriesFramework:
     """
@@ -41,7 +47,7 @@ class TimeSeriesFramework:
         
         return {'train_samples': len(X_train)}
     
-    def evaluate(self, data_path='data/data_tidied.csv', K=3):
+    def evaluate(self, data_path='data_tidied.csv', K=3):
         """
         Evaluate the predictor on test data
         

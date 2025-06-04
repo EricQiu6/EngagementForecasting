@@ -1,3 +1,6 @@
+# Custom
+*.tex
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -201,13 +204,6 @@ data/processed/
 data/external/
 data/interim/
 data/temp/
-
-# Notebook outputs
-*.ipynb
-
-# But keep template notebooks
-!*_template.ipynb
-!*_example.ipynb
 
 # System files
 .DS_Store

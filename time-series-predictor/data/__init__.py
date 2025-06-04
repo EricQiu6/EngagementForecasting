@@ -1,1 +1,1 @@
-# Data package 
+# This file makes data a Python package

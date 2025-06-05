@@ -89,6 +89,50 @@ def get_fold_data(global_timeline, train_indices, test_indices):
     
     return train_data, test_data
 
+def analyze_data_for_split(df):
+    """
+    Analyze the data to determine appropriate K value for chronological split
+    
+    Args:
+        df: DataFrame with columns [name, week, proficient]
+    
+    Returns:
+        dict: Analysis results including recommended K value
+    """
+    print("Analyzing data structure for chronological split...")
+    
+    # Calculate weeks per student
+    weeks_per_student = df.groupby('name')['week'].count()
+    
+    analysis = {
+        'total_students': df['name'].nunique(),
+        'week_range': (df['week'].min(), df['week'].max()),
+        'total_weeks': df['week'].max() - df['week'].min() + 1,
+        'weeks_per_student_stats': {
+            'min': weeks_per_student.min(),
+            'max': weeks_per_student.max(),
+            'mean': weeks_per_student.mean(),
+            'median': weeks_per_student.median(),
+            'std': weeks_per_student.std()
+        },
+        'weeks_distribution': weeks_per_student.value_counts().sort_index().to_dict()
+    }
+    
+    # Recommend K based on data characteristics
+    # Rule: Use ~25-30% of data for testing, but ensure minimum training length
+    median_weeks = weeks_per_student.median()
+    min_training_weeks = 5  # Minimum for meaningful AR model
+    max_test_weeks = max(1, int(median_weeks * 0.3))
+    
+    # Ensure we have enough training data
+    recommended_k = min(max_test_weeks, int(median_weeks - min_training_weeks))
+    recommended_k = max(1, recommended_k)  # At least 1 week for testing
+    
+    analysis['recommended_k'] = recommended_k
+    analysis['reasoning'] = f"With median {median_weeks:.1f} weeks per student, K={recommended_k} provides ~{recommended_k/median_weeks*100:.1f}% test data while ensuring ≥{min_training_weeks} training weeks"
+    
+    return analysis
+
 # Backward compatibility - keep original function
 def split_chronologically(df=None, K=None, data_path='data_tidied.csv'):
     """

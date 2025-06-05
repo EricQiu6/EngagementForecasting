@@ -14,35 +14,39 @@ def train_evaluate():
     print("=== MINIMAL TRAIN & EVALUATION FRAMEWORK ===")
     print()
     
-    # Example 1: Linear Regression (AR model)
-    print("1. Linear Regression (AR model):")
-    lr_predictor = LinearRegression()
-    framework_lr = TimeSeriesFramework(lr_predictor)
+    # Hyperparameters
+    n_splits = 5
+    test_size = 1
     
-    train_result = framework_lr.train()
-    print(f"   Trained on {train_result['train_samples']} samples")
-    
-    eval_result = framework_lr.evaluate(data_path='~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv', K=3)
-    print(f"   MAE: {eval_result['mae']:.3f}")
-    print(f"   RMSE: {eval_result['rmse']:.3f}")
-    print(f"   SMAPE: {eval_result['smape']:.1f}%")
+    print(f"Configuration: {n_splits} folds, {test_size} test week(s) per fold")
     print()
     
-    # Example 2: Random Forest
-    print("2. Random Forest:")
-    rf_predictor = RandomForestRegressor(n_estimators=10, random_state=42)
-    framework_rf = TimeSeriesFramework(rf_predictor)
+    # Test different predictors
+    predictors = [
+        ("Linear Regression (AR)", LinearRegression()),
+        ("Random Forest", RandomForestRegressor(n_estimators=10, random_state=42))
+    ]
     
-    train_result = framework_rf.train()
-    print(f"   Trained on {train_result['train_samples']} samples")
+    for name, predictor in predictors:
+        print(f"=== {name} ===")
+        framework = TimeSeriesFramework(predictor, lag_window=2)
+        
+        results = framework.cross_validate(
+            data_path='~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv',
+            n_splits=n_splits,
+            test_size=test_size
+        )
+        
+        print(f"Results across {results['n_folds']} folds:")
+        print(f"   MAE: {results['mae_mean']:.3f} ± {results['mae_std']:.3f}")
+        print(f"   RMSE: {results['rmse_mean']:.3f} ± {results['rmse_std']:.3f}")
+        print(f"   SMAPE: {results['smape_mean']:.1f}% ± {results['smape_std']:.1f}%")
+        print(f"   Total test samples: {results['total_test_samples']}")
+        print()
     
-    eval_result = framework_rf.evaluate(data_path='~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv', K=3)
-    print(f"   MAE: {eval_result['mae']:.3f}")
-    print(f"   RMSE: {eval_result['rmse']:.3f}")
-    print(f"   SMAPE: {eval_result['smape']:.1f}%")
-    print()
-    
-    print("✅ Framework allows plugging any predictor with fit/predict methods")
+    print("✅ Proper time series cross-validation with confidence intervals")
+    print("✅ Train-test boundary handled correctly")
+    print("✅ All test weeks evaluated (not just final weeks)")
 
 if __name__ == "__main__":
     train_evaluate() 

@@ -83,10 +83,6 @@ def get_fold_data(global_timeline, train_indices, test_indices):
     train_data = global_timeline.iloc[train_indices].copy()
     test_data = global_timeline.iloc[test_indices].copy()
     
-    # Convert back to original format [name, week, proficient]
-    train_data = train_data.rename(columns={'student_id': 'name'})
-    test_data = test_data.rename(columns={'student_id': 'name'})
-    
     return train_data, test_data
 
 def analyze_data_for_split(df):

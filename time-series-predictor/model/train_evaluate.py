@@ -27,8 +27,12 @@ def train_evaluate():
         ("Random Forest", RandomForestRegressor(n_estimators=10, random_state=42))
     ]
     
-    for name, predictor in predictors:
+    for name, predictor_class in predictors:
         print(f"=== {name} ===")
+        
+        # Reinstantiate the predictor for each fold
+        predictor = predictor_class.__class__(**predictor_class.get_params())
+        
         framework = TimeSeriesFramework(predictor, lag_window=2)
         
         results = framework.cross_validate(

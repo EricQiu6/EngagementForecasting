@@ -110,6 +110,7 @@ def demo_pytorch_models():
         ("Simple MLP", SimpleMLP(input_size=10, hidden_sizes=[32, 16])),
         ("LSTM", SimpleLSTM(input_size=2, hidden_size=32, num_layers=2)),
         ("CNN", create_model('cnn', input_size=2, num_filters=[16, 32])),
+        ("DLinear", create_model('dlinear', input_size=2, seq_len=5)),
     ]
     
     results = {}

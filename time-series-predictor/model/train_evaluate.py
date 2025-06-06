@@ -6,6 +6,7 @@ Demo of the minimal train and evaluation framework
 from framework import TimeSeriesFramework
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
+from models import AveragePredictor
 
 def train_evaluate():
     """
@@ -21,8 +22,8 @@ def train_evaluate():
     print(f"Configuration: {n_splits} folds, {test_size} test week(s) per fold")
     print()
     
-    # Test different predictors
     predictors = [
+        ("Average Baseline", AveragePredictor()),
         ("Linear Regression (AR)", LinearRegression()),
         ("Random Forest", RandomForestRegressor(n_estimators=10, random_state=42))
     ]
@@ -33,7 +34,7 @@ def train_evaluate():
         # Reinstantiate the predictor for each fold
         predictor = predictor_class.__class__(**predictor_class.get_params())
         
-        framework = TimeSeriesFramework(predictor, lag_window=2)
+        framework = TimeSeriesFramework(predictor, lag_window=3)
         
         results = framework.cross_validate(
             data_path='~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv',

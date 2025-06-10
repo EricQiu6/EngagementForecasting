@@ -1,5 +1,7 @@
 # Custom
 *.tex
+*/afm_outputs*/
+*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

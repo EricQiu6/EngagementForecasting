@@ -4,7 +4,7 @@
 
 ## setup
 DATA_PATH    <- "All_Data_1884_2013_0215_193821.csv"
-AFM_DIR      <- "afm_outputs7"
+AFM_DIR      <- "afm_outputs8"
 OUTPUT_FILE  <- "student_week_aggregations2.csv"
 
 suppressPackageStartupMessages({
@@ -18,31 +18,7 @@ suppressPackageStartupMessages({
   library(rlang)      # for symbol handling in helper functions
 })
 
-## These functions provide consistent data cleaning across the pipeline
-
-#' Check if a value is valid (not NA, not empty, not whitespace-only)
-#'
-#' This is the strictest validation - use for required string fields
-#' @param x vector to check
-#' @return logical vector
-#' @examples
-#' is_valid(c("hello", "", NA, "  ", "world"))  # TRUE, FALSE, FALSE, FALSE, TRUE
-is_valid <- function(x) {
-  !is.na(x) & x != "" & trimws(x) != ""
-}
-
-#' Log filtering results for transparency
-#'
-#' Helper to consistently log how many rows were removed by filtering
-#' @param data_before data frame before filtering
-#' @param data_after data frame after filtering
-#' @param description description of the filtering step
-#' @return data_after (for piping)
-log_filter_result <- function(data_before, data_after, description) {
-  removed <- nrow(data_before) - nrow(data_after)
-  cat(description, ":", nrow(data_after), "rows (removed:", removed, ")\n")
-  return(data_after)
-}
+source("data_cleaning_helpers.R")  # Use shared cleaning functions
 
 ## 1. Load original data
 raw <- read_delim(DATA_PATH, delim = "\t", show_col_types = FALSE) |>
@@ -91,14 +67,11 @@ student_week_basic <- d_weekly %>%
     # TODO: check if this is correct
     total_opportunities = n(),
 
-    # For skills - keep all unique values to unnest later
-    kc_sub_skills = unique(kc_sub_skills[!is.na(kc_sub_skills)])
+    kc_sub_skills = kc_sub_skills
   ) %>%
-  # Unnest skills using consistent approach with AFM pipeline
-  # TODO: perhaps make a function for skill cleaning
+  # Unnest and clean skills using systematic approach consistent with AFM pipeline
   separate_longer_delim(kc_sub_skills, delim = "~~") %>%
-  filter(is_valid(kc_sub_skills)) %>%
-  mutate(kc_sub_skills = str_trim(kc_sub_skills)) %>%
+  clean_skills_systematic("kc_sub_skills", verbose = FALSE) %>%
 
   # ensure that each unique combination of (student, week, skill) appears only once
   distinct(anon_student_id, week_id, kc_sub_skills, .keep_all = TRUE)
@@ -137,9 +110,8 @@ cat("\nCalculating proficiency estimates...\n")
 
 # First, we need to get the last opportunity for each student-skill in each week
 last_opportunities <- d_weekly %>%
-  filter(is_valid(kc_sub_skills)) %>%
   separate_longer_delim(c(kc_sub_skills, opportunity_sub_skills), delim = "~~") %>%
-  filter(is_valid(kc_sub_skills)) %>%
+  clean_skills_systematic("kc_sub_skills", verbose = TRUE) %>%
   mutate(
     opportunity = as.integer(opportunity_sub_skills)
   ) %>%
@@ -149,10 +121,17 @@ last_opportunities <- d_weekly %>%
     .groups = "drop"
   )
 
+# Diagnostic: Check skill overlap between pipelines
+total_weekly_skills <- n_distinct(last_opportunities$kc_sub_skills)
+afm_skills <- n_distinct(skill_easyness$kc_default)
+
+cat("\nSkill overlap analysis:\n")
+cat("  Total skills in weekly data:", total_weekly_skills, "\n")
+cat("  Total skills in AFM model:", afm_skills, "\n")
 # Join with AFM parameters and calculate proficiency
 proficiency_estimates <- last_opportunities %>%
-  left_join(student_abilities, by = "anon_student_id") %>%
-  left_join(skill_easyness, by = c("kc_sub_skills" = "kc_default")) %>%
+  left_join(student_abilities, by = "anon_student_id", relationship = "many-to-one") %>%
+  left_join(skill_easyness, by = c("kc_sub_skills" = "kc_default"), relationship = "many-to-one") %>%
   mutate(
     # Handle missing values by using 0 (average)
     ability = replace_na(ability, 0),

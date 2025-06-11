@@ -1,6 +1,6 @@
 ## setup
 DATA_PATH   <- "All_Data_1884_2013_0215_193821.csv"          
-OUTPUT_DIR  <- "afm_outputs7"       
+OUTPUT_DIR  <- "afm_outputs8"       
 
 suppressPackageStartupMessages({
   library(readr)      # fast CSV I/O
@@ -12,6 +12,9 @@ suppressPackageStartupMessages({
   library(stringr)    # string manipulation
   library(tibble)     # tibble utilities
 })
+
+# Source data cleaning utilities
+source("data_cleaning_helpers.R")
 
 dir_create(OUTPUT_DIR)
 
@@ -28,51 +31,9 @@ d_long <- raw %>%
            separate_longer_delim(c(kc_sub_skills, opportunity_sub_skills), delim = "~~")
 
 ## -------- Clean up problematic skills before AFM processing ----------------
-# Start with the original long data
-cat("Original skills after separation:", nrow(d_long), "\n")
-cat("Unique skills:", n_distinct(d_long$kc_sub_skills), "\n")
-
-# 1. Remove NA values
-d_step <- d_long %>%
-  filter(!is.na(kc_sub_skills))
-cat("After filtering NA skills:", nrow(d_step), " (removed:", nrow(d_long) - nrow(d_step), ")\n")
-
-# 2. Remove empty strings
-n_before <- nrow(d_step)
-d_step <- d_step %>%
-  filter(kc_sub_skills != "")
-cat("After filtering empty skills:", nrow(d_step), " (removed:", n_before - nrow(d_step), ")\n")
-
-# 3. Remove whitespace-only skills
-n_before <- nrow(d_step)
-d_step <- d_step %>%
-  filter(str_trim(kc_sub_skills) != "")
-cat("After filtering whitespace-only skills:", nrow(d_step), " (removed:", n_before - nrow(d_step), ")\n")
-
-# 4. Remove skills that are too short (likely truncated fragments)
-n_before <- nrow(d_step)
-d_step <- d_step %>%
-  filter(nchar(kc_sub_skills) >= 10)
-cat("After filtering short skills:", nrow(d_step), " (removed:", n_before - nrow(d_step), ")\n")
-
-# 6. Remove skills that are clearly incomplete (don't end with ] if they start with [SkillRule)
-n_before <- nrow(d_step)
-d_step <- d_step %>%
-  filter(!(str_detect(kc_sub_skills, "^\\[SkillRule") & !str_detect(kc_sub_skills, "\\]$")))
-cat("After filtering incomplete SkillRule skills:", nrow(d_step), " (removed:", n_before - nrow(d_step), ")\n")
-
-# 7. Remove skills with weird NULL or ??? patterns
-n_before <- nrow(d_step)
-d_step <- d_step %>%
-  filter(!str_detect(kc_sub_skills, "NULL|\\?\\?\\?"))
-cat("After filtering skills with NULL or ??? patterns:", nrow(d_step), " (removed:", n_before - nrow(d_step), ")\n")
-
-# Final cleaned data
-d_clean <- d_step
-
-cat("Clean skills after filtering:", nrow(d_clean), "\n")
-cat("Total removed problematic skills:", nrow(d_long) - nrow(d_clean), "\n")
-cat("Unique skills remaining:", n_distinct(d_clean$kc_sub_skills), "\n")
+# Apply systematic skill cleaning using helper function
+d_clean <- d_long %>%
+  clean_skills_systematic("kc_sub_skills", min_length = 10, verbose = TRUE)
 
 ## build AFM variables
 d_afm <- d_clean %>% 
@@ -97,8 +58,11 @@ bad_pairs <- d_afm %>%
 if (nrow(bad_pairs))
   warning("Some student–skill pairs do not start at n_opportunity = 1. (negligible)")
 
+cat("AFM data prepared:", nrow(d_afm), "rows\n")
+
 ## -------- 5. Fit the AFM ----------------------------------------------------
 
+cat("Fitting AFM model...\n")
 m_afm <- glmer(
   outcome_bin ~ n_opportunity + 
     (1 | anon_student_id) + 
@@ -134,4 +98,4 @@ cat("\nAFM pipeline complete!\n",
     "  • Model saved to:          ", path(OUTPUT_DIR, "afm_model.rds"), "\n",
     "  • Student abilities:       ", path(OUTPUT_DIR, "student_ability.csv"), "\n",
     "  • Skill difficulties:      ", path(OUTPUT_DIR, "skill_easyness.csv"), "\n",
-    "  • Global learning rate:    ", path(OUTPUT_DIR, "global_learning_rate.csv"), "\n")
+    "  • Global learning rate:    ", path(OUTPUT_DIR, "global_learning_rate.csv"), "\n") 

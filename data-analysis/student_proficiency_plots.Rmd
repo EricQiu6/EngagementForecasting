@@ -1,0 +1,166 @@
+---
+title: "Student Proficiency Analysis"
+author: "Analysis"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 12, fig.height = 8)
+```
+
+## Load Libraries and Data
+
+```{r load-libraries}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(viridis)
+library(lubridate)
+
+# Load the student-week aggregations
+data <- read_csv("student_week_aggregations2.csv")
+
+# Basic data info
+cat("Data dimensions:", nrow(data), "rows,", ncol(data), "columns\n")
+cat("Date range:", min(data$week_id), "to", max(data$week_id), "\n")
+cat("Number of unique students:", n_distinct(data$anon_student_id), "\n")
+cat("Number of unique weeks:", n_distinct(data$week_id), "\n")
+```
+
+## Data Preparation
+
+```{r data-prep}
+# Filter to students with proficiency data and reasonable activity
+students_with_proficiency <- data %>%
+  filter(!is.na(avg_proficiency)) %>%
+  group_by(anon_student_id) %>%
+  summarise(
+    n_weeks = n(),
+    avg_proficiency_overall = mean(avg_proficiency, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(n_weeks >= 3)  # At least 3 weeks of data
+
+cat("Students with proficiency data and ≥3 weeks:", nrow(students_with_proficiency), "\n")
+
+# Sample students for heatmap (to avoid overcrowding)
+set.seed(42)  # For reproducibility
+sample_size <- min(20, nrow(students_with_proficiency))  # Max 20 students
+sampled_students <- students_with_proficiency %>%
+  slice_sample(n = sample_size) %>%
+  pull(anon_student_id)
+
+cat("Sampled", length(sampled_students), "students for heatmap\n")
+```
+
+## Heatmap: Sample Students' Proficiency Across Weeks
+
+```{r heatmap}
+# Prepare data for heatmap
+heatmap_data <- data %>%
+  filter(anon_student_id %in% sampled_students,
+         !is.na(avg_proficiency)) %>%
+  # Create shorter student labels for readability
+  mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
+
+# Create heatmap
+p1 <- ggplot(heatmap_data, aes(x = week_id, y = student_label, fill = avg_proficiency)) +
+  geom_tile(color = "white", size = 0.1) +
+  scale_fill_viridis_c(name = "Proficiency", 
+                       option = "plasma",
+                       na.value = "grey90") +
+  labs(
+    title = "Student Proficiency Heatmap Across Weeks",
+    subtitle = paste("Sample of", length(sampled_students), "students"),
+    x = "Week",
+    y = "Student"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    axis.text.y = element_text(size = 8),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+
+print(p1)
+```
+
+## Box Plots: Proficiency Distribution Across Weeks
+
+```{r boxplots}
+# Prepare data for box plots - filter to weeks with sufficient data
+weekly_counts <- data %>%
+  filter(!is.na(avg_proficiency)) %>%
+  count(week_id, name = "n_students") %>%
+  filter(n_students >= 5)  # At least 5 students per week
+
+box_data <- data %>%
+  filter(!is.na(avg_proficiency),
+         week_id %in% weekly_counts$week_id)
+
+# Create box plots
+p2 <- ggplot(box_data, aes(x = week_id, y = avg_proficiency)) +
+  geom_boxplot(aes(group = week_id), 
+               outlier.alpha = 0.6, 
+               outlier.size = 0.8,
+               fill = "lightblue", 
+               alpha = 0.7) +
+  geom_smooth(aes(group = 1), 
+              method = "loess", 
+              se = TRUE, 
+              color = "red", 
+              size = 1) +
+  labs(
+    title = "Distribution of Student Proficiency Across Weeks",
+    subtitle = "Box plots show quartiles, red line shows trend",
+    x = "Week",
+    y = "Average Proficiency"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  ) +
+  scale_y_continuous(limits = c(0, 1))
+
+print(p2)
+```
+
+## Summary Statistics
+
+```{r summary-stats}
+# Overall proficiency statistics
+proficiency_summary <- data %>%
+  filter(!is.na(avg_proficiency)) %>%
+  summarise(
+    n_observations = n(),
+    mean_proficiency = mean(avg_proficiency),
+    median_proficiency = median(avg_proficiency),
+    sd_proficiency = sd(avg_proficiency),
+    min_proficiency = min(avg_proficiency),
+    max_proficiency = max(avg_proficiency)
+  )
+
+cat("Overall Proficiency Statistics:\n")
+print(proficiency_summary)
+
+# Weekly trend summary
+weekly_summary <- data %>%
+  filter(!is.na(avg_proficiency)) %>%
+  group_by(week_id) %>%
+  summarise(
+    n_students = n(),
+    mean_proficiency = mean(avg_proficiency),
+    median_proficiency = median(avg_proficiency),
+    .groups = "drop"
+  ) %>%
+  arrange(week_id)
+
+cat("\nWeeks summary:\n")
+print(n = Inf, weekly_summary)
+``` 

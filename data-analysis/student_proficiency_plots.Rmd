@@ -22,7 +22,7 @@ library(stringr)
 library(tibble)
 
 # Load the student-week aggregations
-data <- read_csv("student_week_aggregations_END-START.csv")
+data <- read_csv("student_week_aggregations2.csv")
 
 # Basic data info
 cat("Data dimensions:", nrow(data), "rows,", ncol(data), "columns\n")
@@ -39,47 +39,47 @@ create_heatmap <- function(data, metric_col, title_suffix, sample_size = 20) {
   # Filter to students with data for the metric and reasonable activity
   students_with_data <- data %>%
     filter(!is.na(!!sym(metric_col))) %>%
-    group_by(anon_student_id) %>%
-    summarise(
-      n_weeks = n(),
-      .groups = "drop"
-    ) %>%
-    filter(n_weeks >= 3)  # At least 3 weeks of data
-  
+  group_by(anon_student_id) %>%
+  summarise(
+    n_weeks = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n_weeks >= 3)  # At least 3 weeks of data
+
   # Sample students for heatmap
-  set.seed(42)  # For reproducibility
+set.seed(42)  # For reproducibility
   sample_size <- min(sample_size, nrow(students_with_data))
   sampled_students <- students_with_data %>%
-    slice_sample(n = sample_size) %>%
-    pull(anon_student_id)
-  
-  # Prepare data for heatmap
-  heatmap_data <- data %>%
-    filter(anon_student_id %in% sampled_students,
+  slice_sample(n = sample_size) %>%
+  pull(anon_student_id)
+
+# Prepare data for heatmap
+heatmap_data <- data %>%
+  filter(anon_student_id %in% sampled_students,
            !is.na(!!sym(metric_col))) %>%
-    mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
-  
-  # Create heatmap
+  mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
+
+# Create heatmap
   p <- ggplot(heatmap_data, aes(x = week_id, y = student_label, fill = !!sym(metric_col))) +
-    geom_tile(color = "white", size = 0.1) +
+  geom_tile(color = "white", size = 0.1) +
     scale_fill_viridis_c(name = str_to_title(gsub("_", " ", metric_col)), 
-                         option = "plasma",
-                         na.value = "grey90") +
-    labs(
+                       option = "plasma",
+                       na.value = "grey90") +
+  labs(
       title = paste("Student", title_suffix, "Heatmap Across Weeks"),
-      subtitle = paste("Sample of", length(sampled_students), "students"),
-      x = "Week",
-      y = "Student"
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-      axis.text.y = element_text(size = 8),
-      panel.grid = element_blank(),
-      plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12)
-    )
-  
+    subtitle = paste("Sample of", length(sampled_students), "students"),
+    x = "Week",
+    y = "Student"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    axis.text.y = element_text(size = 8),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+
   return(list(plot = p, sampled_students = sampled_students))
 }
 
@@ -92,61 +92,61 @@ create_line_plot <- function(data, metric_col, title_suffix, sampled_students) {
     mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
   
   p <- ggplot(line_data, aes(x = week_id, y = !!sym(metric_col), color = student_label, group = student_label)) +
-    geom_line(alpha = 0.7, size = 0.8) +
-    geom_point(alpha = 0.8, size = 1.5) +
-    scale_color_viridis_d(name = "Student", option = "plasma") +
-    labs(
+  geom_line(alpha = 0.7, size = 0.8) +
+  geom_point(alpha = 0.8, size = 1.5) +
+  scale_color_viridis_d(name = "Student", option = "plasma") +
+  labs(
       title = paste("Student", title_suffix, "Progression Over Time"),
-      subtitle = paste("Sample of", length(sampled_students), "students"),
-      x = "Week",
+    subtitle = paste("Sample of", length(sampled_students), "students"),
+    x = "Week",
       y = str_to_title(gsub("_", " ", metric_col))
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-      plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12),
-      legend.position = "right"
-    ) +
-    guides(color = guide_legend(override.aes = list(alpha = 1, size = 2)))
-  
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    legend.position = "right"
+  ) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, size = 2)))
+
   return(p)
 }
 
 # Function to create box plots for any metric
 create_box_plot <- function(data, metric_col, title_suffix, log_scale = FALSE) {
   # Filter to weeks with sufficient data
-  weekly_counts <- data %>%
+weekly_counts <- data %>%
     filter(!is.na(!!sym(metric_col))) %>%
-    count(week_id, name = "n_students") %>%
-    filter(n_students >= 5)  # At least 5 students per week
-  
-  box_data <- data %>%
+  count(week_id, name = "n_students") %>%
+  filter(n_students >= 5)  # At least 5 students per week
+
+box_data <- data %>%
     filter(!is.na(!!sym(metric_col)),
-           week_id %in% weekly_counts$week_id)
-  
+         week_id %in% weekly_counts$week_id)
+
   p <- ggplot(box_data, aes(x = week_id, y = !!sym(metric_col))) +
-    geom_boxplot(aes(group = week_id), 
-                 outlier.alpha = 0.6, 
-                 outlier.size = 0.8,
-                 fill = "lightblue", 
-                 alpha = 0.7) +
-    geom_smooth(aes(group = 1), 
-                method = "loess", 
-                se = TRUE, 
-                color = "red", 
-                size = 1) +
-    labs(
+  geom_boxplot(aes(group = week_id), 
+               outlier.alpha = 0.6, 
+               outlier.size = 0.8,
+               fill = "lightblue", 
+               alpha = 0.7) +
+  geom_smooth(aes(group = 1), 
+              method = "loess", 
+              se = TRUE, 
+              color = "red", 
+              size = 1) +
+  labs(
       title = paste("Distribution of Student", title_suffix, "Across Weeks"),
-      subtitle = "Box plots show quartiles, red line shows trend",
-      x = "Week",
+    subtitle = "Box plots show quartiles, red line shows trend",
+    x = "Week",
       y = str_to_title(gsub("_", " ", metric_col))
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-      plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12)
     )
   
   # Apply log scale if requested
@@ -162,30 +162,30 @@ generate_summary_stats <- function(data, metric_col, title_suffix) {
   # Overall statistics
   overall_summary <- data %>%
     filter(!is.na(!!sym(metric_col))) %>%
-    summarise(
-      n_observations = n(),
+  summarise(
+    n_observations = n(),
       mean_value = mean(!!sym(metric_col)),
       median_value = median(!!sym(metric_col)),
       sd_value = sd(!!sym(metric_col)),
       min_value = min(!!sym(metric_col)),
       max_value = max(!!sym(metric_col))
-    )
-  
+  )
+
   cat("Overall", title_suffix, "Statistics:\n")
   print(overall_summary)
-  
-  # Weekly trend summary
-  weekly_summary <- data %>%
+
+# Weekly trend summary
+weekly_summary <- data %>%
     filter(!is.na(!!sym(metric_col))) %>%
-    group_by(week_id) %>%
-    summarise(
-      n_students = n(),
+  group_by(week_id) %>%
+  summarise(
+    n_students = n(),
       mean_value = mean(!!sym(metric_col)),
       median_value = median(!!sym(metric_col)),
-      .groups = "drop"
-    ) %>%
-    arrange(week_id)
-  
+    .groups = "drop"
+  ) %>%
+  arrange(week_id)
+
   cat("\nWeekly", title_suffix, "Summary (first 10 weeks):\n")
   print(head(weekly_summary, 10))
   

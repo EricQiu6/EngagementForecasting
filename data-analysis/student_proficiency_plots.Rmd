@@ -1,5 +1,5 @@
 ---
-title: "Student Proficiency Analysis2"
+title: "Student Weekly Metrics Analysis"
 author: "Analysis"
 date: "`r Sys.Date()`"
 output: html_document
@@ -18,9 +18,11 @@ library(ggplot2)
 library(tidyr)
 library(viridis)
 library(lubridate)
+library(stringr)
+library(tibble)
 
 # Load the student-week aggregations
-data <- read_csv("student_week_aggregations2.csv")
+data <- read_csv("student_week_aggregations_END-START.csv")
 
 # Basic data info
 cat("Data dimensions:", nrow(data), "rows,", ncol(data), "columns\n")
@@ -29,138 +31,263 @@ cat("Number of unique students:", n_distinct(data$anon_student_id), "\n")
 cat("Number of unique weeks:", n_distinct(data$week_id), "\n")
 ```
 
-## Data Preparation
+## Helper Functions for Visualizations
 
-```{r data-prep}
-# Filter to students with proficiency data and reasonable activity
-students_with_proficiency <- data %>%
-  filter(!is.na(avg_proficiency)) %>%
-  group_by(anon_student_id) %>%
-  summarise(
-    n_weeks = n(),
-    avg_proficiency_overall = mean(avg_proficiency, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  filter(n_weeks >= 3)  # At least 3 weeks of data
+```{r helper-functions}
+# Function to create heatmaps for any metric
+create_heatmap <- function(data, metric_col, title_suffix, sample_size = 20) {
+  # Filter to students with data for the metric and reasonable activity
+  students_with_data <- data %>%
+    filter(!is.na(!!sym(metric_col))) %>%
+    group_by(anon_student_id) %>%
+    summarise(
+      n_weeks = n(),
+      .groups = "drop"
+    ) %>%
+    filter(n_weeks >= 3)  # At least 3 weeks of data
+  
+  # Sample students for heatmap
+  set.seed(42)  # For reproducibility
+  sample_size <- min(sample_size, nrow(students_with_data))
+  sampled_students <- students_with_data %>%
+    slice_sample(n = sample_size) %>%
+    pull(anon_student_id)
+  
+  # Prepare data for heatmap
+  heatmap_data <- data %>%
+    filter(anon_student_id %in% sampled_students,
+           !is.na(!!sym(metric_col))) %>%
+    mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
+  
+  # Create heatmap
+  p <- ggplot(heatmap_data, aes(x = week_id, y = student_label, fill = !!sym(metric_col))) +
+    geom_tile(color = "white", size = 0.1) +
+    scale_fill_viridis_c(name = str_to_title(gsub("_", " ", metric_col)), 
+                         option = "plasma",
+                         na.value = "grey90") +
+    labs(
+      title = paste("Student", title_suffix, "Heatmap Across Weeks"),
+      subtitle = paste("Sample of", length(sampled_students), "students"),
+      x = "Week",
+      y = "Student"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+      axis.text.y = element_text(size = 8),
+      panel.grid = element_blank(),
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12)
+    )
+  
+  return(list(plot = p, sampled_students = sampled_students))
+}
 
-cat("Students with proficiency data and ≥3 weeks:", nrow(students_with_proficiency), "\n")
+# Function to create line plots for any metric
+create_line_plot <- function(data, metric_col, title_suffix, sampled_students) {
+  # Prepare data for line plot
+  line_data <- data %>%
+    filter(anon_student_id %in% sampled_students,
+           !is.na(!!sym(metric_col))) %>%
+    mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
+  
+  p <- ggplot(line_data, aes(x = week_id, y = !!sym(metric_col), color = student_label, group = student_label)) +
+    geom_line(alpha = 0.7, size = 0.8) +
+    geom_point(alpha = 0.8, size = 1.5) +
+    scale_color_viridis_d(name = "Student", option = "plasma") +
+    labs(
+      title = paste("Student", title_suffix, "Progression Over Time"),
+      subtitle = paste("Sample of", length(sampled_students), "students"),
+      x = "Week",
+      y = str_to_title(gsub("_", " ", metric_col))
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      legend.position = "right"
+    ) +
+    guides(color = guide_legend(override.aes = list(alpha = 1, size = 2)))
+  
+  return(p)
+}
 
-# Sample students for heatmap (to avoid overcrowding)
-set.seed(42)  # For reproducibility
-sample_size <- min(20, nrow(students_with_proficiency))  # Max 20 students
-sampled_students <- students_with_proficiency %>%
-  slice_sample(n = sample_size) %>%
-  pull(anon_student_id)
+# Function to create box plots for any metric
+create_box_plot <- function(data, metric_col, title_suffix, log_scale = FALSE) {
+  # Filter to weeks with sufficient data
+  weekly_counts <- data %>%
+    filter(!is.na(!!sym(metric_col))) %>%
+    count(week_id, name = "n_students") %>%
+    filter(n_students >= 5)  # At least 5 students per week
+  
+  box_data <- data %>%
+    filter(!is.na(!!sym(metric_col)),
+           week_id %in% weekly_counts$week_id)
+  
+  p <- ggplot(box_data, aes(x = week_id, y = !!sym(metric_col))) +
+    geom_boxplot(aes(group = week_id), 
+                 outlier.alpha = 0.6, 
+                 outlier.size = 0.8,
+                 fill = "lightblue", 
+                 alpha = 0.7) +
+    geom_smooth(aes(group = 1), 
+                method = "loess", 
+                se = TRUE, 
+                color = "red", 
+                size = 1) +
+    labs(
+      title = paste("Distribution of Student", title_suffix, "Across Weeks"),
+      subtitle = "Box plots show quartiles, red line shows trend",
+      x = "Week",
+      y = str_to_title(gsub("_", " ", metric_col))
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12)
+    )
+  
+  # Apply log scale if requested
+  if (log_scale) {
+    p <- p + scale_y_log10()
+  }
+  
+  return(p)
+}
 
-cat("Sampled", length(sampled_students), "students for heatmap\n")
+# Function to generate summary statistics
+generate_summary_stats <- function(data, metric_col, title_suffix) {
+  # Overall statistics
+  overall_summary <- data %>%
+    filter(!is.na(!!sym(metric_col))) %>%
+    summarise(
+      n_observations = n(),
+      mean_value = mean(!!sym(metric_col)),
+      median_value = median(!!sym(metric_col)),
+      sd_value = sd(!!sym(metric_col)),
+      min_value = min(!!sym(metric_col)),
+      max_value = max(!!sym(metric_col))
+    )
+  
+  cat("Overall", title_suffix, "Statistics:\n")
+  print(overall_summary)
+  
+  # Weekly trend summary
+  weekly_summary <- data %>%
+    filter(!is.na(!!sym(metric_col))) %>%
+    group_by(week_id) %>%
+    summarise(
+      n_students = n(),
+      mean_value = mean(!!sym(metric_col)),
+      median_value = median(!!sym(metric_col)),
+      .groups = "drop"
+    ) %>%
+    arrange(week_id)
+  
+  cat("\nWeekly", title_suffix, "Summary (first 10 weeks):\n")
+  print(head(weekly_summary, 10))
+  
+  return(list(overall = overall_summary, weekly = weekly_summary))
+}
 ```
 
-## Heatmap: Sample Students' Proficiency Across Weeks
+## Proficiency Analysis
 
-```{r heatmap}
-# Prepare data for heatmap
-heatmap_data <- data %>%
-  filter(anon_student_id %in% sampled_students,
-         !is.na(avg_proficiency)) %>%
-  # Create shorter student labels for readability
-  mutate(student_label = paste0("S", match(anon_student_id, sampled_students)))
+```{r proficiency-analysis}
+heatmap_result <- create_heatmap(data, "avg_proficiency", "Proficiency")
+print(heatmap_result$plot)
 
-# Create heatmap
-p1 <- ggplot(heatmap_data, aes(x = week_id, y = student_label, fill = avg_proficiency)) +
-  geom_tile(color = "white", size = 0.1) +
-  scale_fill_viridis_c(name = "Proficiency", 
-                       option = "plasma",
-                       na.value = "grey90") +
+line_plot <- create_line_plot(data, "avg_proficiency", "Proficiency", heatmap_result$sampled_students)
+print(line_plot + scale_y_continuous(limits = c(0, 1)))
+
+box_plot <- create_box_plot(data, "avg_proficiency", "Proficiency")
+print(box_plot + scale_y_continuous(limits = c(0, 1)))
+
+proficiency_stats <- generate_summary_stats(data, "avg_proficiency", "Proficiency")
+```
+
+## Minutes Per Week Analysis
+
+```{r minutes-analysis}
+heatmap_result <- create_heatmap(data, "minutes_per_week", "Minutes Per Week")
+print(heatmap_result$plot)
+
+line_plot <- create_line_plot(data, "minutes_per_week", "Minutes Per Week", heatmap_result$sampled_students)
+print(line_plot)
+
+# Use log scale for minutes due to wide range
+box_plot <- create_box_plot(data, "minutes_per_week", "Minutes Per Week", log_scale = TRUE)
+print(box_plot + labs(subtitle = "Box plots show quartiles, red line shows trend (log scale)"))
+
+minutes_stats <- generate_summary_stats(data, "minutes_per_week", "Minutes Per Week")
+```
+
+## Problems Solved Analysis
+
+```{r problems-analysis}
+heatmap_result <- create_heatmap(data, "problems_solved", "Problems Solved")
+print(heatmap_result$plot)
+
+line_plot <- create_line_plot(data, "problems_solved", "Problems Solved", heatmap_result$sampled_students)
+print(line_plot)
+
+box_plot <- create_box_plot(data, "problems_solved", "Problems Solved")
+print(box_plot)
+
+problems_stats <- generate_summary_stats(data, "problems_solved", "Problems Solved")
+```
+
+## Total Opportunities Analysis
+
+```{r opportunities-analysis}
+heatmap_result <- create_heatmap(data, "total_opportunities", "Total Opportunities")
+print(heatmap_result$plot)
+
+line_plot <- create_line_plot(data, "total_opportunities", "Total Opportunities", heatmap_result$sampled_students)
+print(line_plot)
+
+box_plot <- create_box_plot(data, "total_opportunities", "Total Opportunities")
+print(box_plot)
+
+opportunities_stats <- generate_summary_stats(data, "total_opportunities", "Total Opportunities")
+```
+
+## Correlation Analysis
+
+```{r correlation-analysis}
+# Create correlation matrix for all metrics
+correlation_data <- data %>%
+  select(avg_proficiency, minutes_per_week, problems_solved, total_opportunities) %>%
+  filter(complete.cases(.))
+
+cor_matrix <- cor(correlation_data)
+
+# Create correlation heatmap using tidyr
+cor_melted <- cor_matrix %>%
+  as.data.frame() %>%
+  rownames_to_column("Var1") %>%
+  pivot_longer(-Var1, names_to = "Var2", values_to = "value")
+
+p_cor <- ggplot(cor_melted, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab", 
+                       name="Correlation") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
   labs(
-    title = "Student Proficiency Heatmap Across Weeks",
-    subtitle = paste("Sample of", length(sampled_students), "students"),
-    x = "Week",
-    y = "Student"
+    title = "Correlation Matrix of Student Weekly Metrics",
+    x = "", y = ""
   ) +
   theme_minimal() +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-    axis.text.y = element_text(size = 8),
-    panel.grid = element_blank(),
-    plot.title = element_text(size = 14, face = "bold"),
-    plot.subtitle = element_text(size = 12)
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 14, face = "bold")
   )
 
-print(p1)
-```
+print(p_cor)
 
-## Box Plots: Proficiency Distribution Across Weeks
-
-```{r boxplots}
-# Prepare data for box plots - filter to weeks with sufficient data
-weekly_counts <- data %>%
-  filter(!is.na(avg_proficiency)) %>%
-  count(week_id, name = "n_students") %>%
-  filter(n_students >= 5)  # At least 5 students per week
-
-box_data <- data %>%
-  filter(!is.na(avg_proficiency),
-         week_id %in% weekly_counts$week_id)
-
-# Create box plots
-p2 <- ggplot(box_data, aes(x = week_id, y = avg_proficiency)) +
-  geom_boxplot(aes(group = week_id), 
-               outlier.alpha = 0.6, 
-               outlier.size = 0.8,
-               fill = "lightblue", 
-               alpha = 0.7) +
-  geom_smooth(aes(group = 1), 
-              method = "loess", 
-              se = TRUE, 
-              color = "red", 
-              size = 1) +
-  labs(
-    title = "Distribution of Student Proficiency Across Weeks",
-    subtitle = "Box plots show quartiles, red line shows trend",
-    x = "Week",
-    y = "Average Proficiency"
-  ) +
-  theme_minimal() +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-    plot.title = element_text(size = 14, face = "bold"),
-    plot.subtitle = element_text(size = 12)
-  ) +
-  scale_y_continuous(limits = c(0, 1))
-
-print(p2)
-```
-
-## Summary Statistics
-
-```{r summary-stats}
-# Overall proficiency statistics
-proficiency_summary <- data %>%
-  filter(!is.na(avg_proficiency)) %>%
-  summarise(
-    n_observations = n(),
-    mean_proficiency = mean(avg_proficiency),
-    median_proficiency = median(avg_proficiency),
-    sd_proficiency = sd(avg_proficiency),
-    min_proficiency = min(avg_proficiency),
-    max_proficiency = max(avg_proficiency)
-  )
-
-cat("Overall Proficiency Statistics:\n")
-print(proficiency_summary)
-
-# Weekly trend summary
-weekly_summary <- data %>%
-  filter(!is.na(avg_proficiency)) %>%
-  group_by(week_id) %>%
-  summarise(
-    n_students = n(),
-    mean_proficiency = mean(avg_proficiency),
-    median_proficiency = median(avg_proficiency),
-    .groups = "drop"
-  ) %>%
-  arrange(week_id)
-
-cat("\nWeeks summary:\n")
-print(n = Inf, weekly_summary)
+cat("Correlation Matrix:\n")
+print(round(cor_matrix, 3))
 ``` 

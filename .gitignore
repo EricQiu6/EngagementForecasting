@@ -2,6 +2,8 @@
 *.tex
 */afm_outputs*/
 *.txt
+*.html
+*.lintr*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

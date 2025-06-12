@@ -10,6 +10,11 @@ OUTPUT_FILE  <- "student_week_aggregations2.csv"
 # Control how duration is calculated
 USE_PROVIDED_DURATION <- TRUE  # TRUE: use step_duration_sec, FALSE: calculate from step_end_time - step_start_time
 
+# Control how proficiency is calculated
+PROFICIENCY_METHOD <- "new_skills_mastered"  # "mean": average proficiency across all skills
+                              # "new_skills_mastered": count of NEW skills reaching >95% proficiency each week
+# the two methods are intended for different use cases
+
 suppressPackageStartupMessages({
   library(readr)      # fast CSV I/O
   library(dplyr)      # data wrangling
@@ -154,14 +159,58 @@ proficiency_estimates <- last_opportunities %>%
     proficiency = 1 / (1 + exp(-logit_p))
   )
 
-# Average estimated proficiency across all skills by student-week
-avg_proficiency <- proficiency_estimates %>%
-  group_by(anon_student_id, week_id) %>%
-  summarise(
-    avg_proficiency = mean(proficiency, na.rm = TRUE),
-    n_skills_measured = n(),
-    .groups = "drop"
-  )
+# Calculate proficiency metric based on chosen method
+cat("Using proficiency method:", PROFICIENCY_METHOD, "\n")
+
+if (PROFICIENCY_METHOD == "mean") {
+  # Method 1: Average proficiency across all skills
+  avg_proficiency <- proficiency_estimates %>%
+    group_by(anon_student_id, week_id) %>%
+    summarise(
+      avg_proficiency = mean(proficiency, na.rm = TRUE),
+      n_skills_measured = n(),
+      .groups = "drop"
+    )
+  cat("Calculated average proficiency across skills\n")
+  
+} else if (PROFICIENCY_METHOD == "new_skills_mastered") {
+  # Method 2: Count of NEW skills reaching >95% proficiency each week
+  
+  # Step 1: For each student-skill, find the first week they reached >95% proficiency
+  first_mastery_week <- proficiency_estimates %>%
+    filter(proficiency > 0.95) %>%
+    group_by(anon_student_id, kc_sub_skills) %>%
+    summarise(
+      first_mastery_week = min(week_id),
+      .groups = "drop"
+    )
+  
+  # Step 2: Count how many skills were newly mastered in each week
+  new_skills_per_week <- first_mastery_week %>%
+    group_by(anon_student_id, first_mastery_week) %>%
+    summarise(
+      new_skills_mastered = n(),
+      .groups = "drop"
+    ) %>%
+    rename(week_id = first_mastery_week)
+  
+  # Step 3: Create full student-week grid and fill in zeros for weeks with no new masteries
+  all_student_weeks <- proficiency_estimates %>%
+    distinct(anon_student_id, week_id)
+  
+  avg_proficiency <- all_student_weeks %>%
+    left_join(new_skills_per_week, by = c("anon_student_id", "week_id")) %>%
+    mutate(
+      avg_proficiency = replace_na(new_skills_mastered, 0),
+      n_skills_measured = NA_integer_  # measure is not applicable for this counting method
+    ) %>%
+    select(-new_skills_mastered)
+  
+  cat("Calculated count of newly mastered skills per week\n")
+  
+} else {
+  stop("Invalid PROFICIENCY_METHOD. Use 'mean' or 'new_skills_mastered'")
+}
 
 
 ## 6. Combine all metrics

@@ -7,6 +7,9 @@ DATA_PATH    <- "All_Data_1884_2013_0215_193821.csv"
 AFM_DIR      <- "afm_outputs8"
 OUTPUT_FILE  <- "student_week_aggregations2.csv"
 
+# Control how duration is calculated
+USE_PROVIDED_DURATION <- TRUE  # TRUE: use step_duration_sec, FALSE: calculate from step_end_time - step_start_time
+
 suppressPackageStartupMessages({
   library(readr)      # fast CSV I/O
   library(dplyr)      # data wrangling
@@ -34,14 +37,21 @@ d_weekly <- raw %>%
   mutate(
     # Parse datetime
     step_start_datetime = ymd_hms(step_start_time),
+    
+    # Calculate duration based on parameter
+    duration_sec = if (USE_PROVIDED_DURATION) {
+      as.numeric(step_duration_sec)
+    } else {
+      # Calculate from step_end_time - step_start_time  
+      step_end_datetime <- ymd_hms(step_end_time)
+      as.numeric(difftime(step_end_datetime, step_start_datetime, units = "secs"))
+    },
 
     # Create week identifier using ISO year and week: YYYY-WNN, 2011-W37
     week_year = isoyear(step_start_datetime),
     week_num = isoweek(step_start_datetime),
     week_id = paste0(week_year, "-W", sprintf("%02d", week_num)),
 
-    # Ensure duration is numeric
-    duration_sec = as.numeric(step_duration_sec)
   ) %>%
   # Apply consistent filtering for valid timestamps
   filter(!is.na(step_start_datetime)) %>%
@@ -70,6 +80,8 @@ student_week_basic <- d_weekly %>%
     kc_sub_skills = kc_sub_skills
   ) %>%
   # Unnest and clean skills using systematic approach consistent with AFM pipeline
+  # This is NEEDED because some students are filtered out through the skill cleaning,
+  # and we must ensure that the students match exactly with the AFM outlines.
   separate_longer_delim(kc_sub_skills, delim = "~~") %>%
   clean_skills_systematic("kc_sub_skills", verbose = FALSE) %>%
 

@@ -56,10 +56,11 @@ clean_skills_systematic <- function(data, skill_column = "kc_sub_skills",
   data <- data %>% filter(nchar(!!skill_sym) >= min_length)
   if (verbose) data <- log_filter_result(prev_data, data, paste("After removing skills shorter than", min_length, "chars"))
   
-  # Step 5: Remove incomplete SkillRule patterns
-  prev_data <- data
-  data <- data %>% filter(!(str_detect(!!skill_sym, "^\\[SkillRule") & !str_detect(!!skill_sym, "\\]$")))
-  if (verbose) data <- log_filter_result(prev_data, data, "After removing incomplete SkillRule skills")
+  # Removed per Conrad's suggestion
+  # # Step 5: Remove incomplete SkillRule patterns
+  # prev_data <- data
+  # data <- data %>% filter(!(str_detect(!!skill_sym, "^\\[SkillRule") & !str_detect(!!skill_sym, "\\]$")))
+  # if (verbose) data <- log_filter_result(prev_data, data, "After removing incomplete SkillRule skills")
   
   # Step 6: Remove skills with problematic patterns
   prev_data <- data

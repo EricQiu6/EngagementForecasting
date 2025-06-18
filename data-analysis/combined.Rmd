@@ -39,6 +39,14 @@ USE_CACHED_MODEL <- FALSE  # Set to TRUE to load existing model instead of refit
 
 # Filter to last N weeks (set to NULL to use all data)
 LAST_N_WEEKS <- 4  # Examples: NULL (all data), 52 (last year), 12 (last quarter), 4 (last month)
+
+# Sample a percentage of students (set to 100 to use all students)
+STUDENT_SAMPLE_PERCENT <- 30  # Examples: 100 (all), 80 (80% of students), 10 (10% for quick testing)
+STUDENT_SAMPLE_SEED <- 42      # Random seed for reproducible sampling
+
+# Outlier removal for durations using Tukey's fences
+REMOVE_DURATION_OUTLIERS <- TRUE  # Set to FALSE to keep all durations
+TUKEY_K <- 1.5                   # Multiplier for IQR (1.5 = standard, 3.0 = extreme outliers only)
 ```
 
 # Libraries
@@ -93,6 +101,59 @@ d_with_week_id <- raw %>%
   filter(!is.na(step_start_datetime)) %>%
   log_filter_result(raw, ., "After filtering invalid timestamps")
 
+# Apply Tukey's fences for duration outlier removal
+if (REMOVE_DURATION_OUTLIERS) {
+  # Get valid durations
+  valid_durations <- d_with_week_id %>%
+    filter(!is.na(duration_sec) & duration_sec > 0) %>%
+    pull(duration_sec)
+  
+  # Use native boxplot.stats() which implements Tukey's fences
+  # coef parameter is the k multiplier (default is 1.5)
+  box_stats <- boxplot.stats(valid_durations, coef = TUKEY_K)
+  
+  # Extract the calculated values
+  lower_fence <- max(0, min(box_stats$stats[1]))  # Lower whisker, can't be negative
+  upper_fence <- box_stats$stats[5]               # Upper whisker
+  q1 <- box_stats$stats[2]
+  median_val <- box_stats$stats[3]
+  q3 <- box_stats$stats[4]
+  outliers <- box_stats$out
+  
+  # Apply filtering - keep non-outliers
+  n_before <- nrow(d_with_week_id)
+  d_with_week_id <- d_with_week_id %>%
+    filter(is.na(duration_sec) | (duration_sec >= lower_fence & duration_sec <= upper_fence))
+  n_after <- nrow(d_with_week_id)
+  n_removed <- n_before - n_after
+  
+  # Calculate statistics for reporting
+  mean_before <- mean(valid_durations)
+  mean_after <- mean(d_with_week_id$duration_sec, na.rm = TRUE)
+  
+  cat("\n=== Duration Outlier Removal (Tukey's Fences) ===\n")
+  cat("Method: boxplot.stats() with coef =", TUKEY_K, "\n")
+  cat("\nDuration statistics (seconds):\n")
+  cat("  Q1 (25th percentile):", round(q1, 1), "sec (", round(q1/60, 1), "min)\n")
+  cat("  Median:", round(median_val, 1), "sec (", round(median_val/60, 1), "min)\n")
+  cat("  Q3 (75th percentile):", round(q3, 1), "sec (", round(q3/60, 1), "min)\n")
+  cat("  IQR:", round(q3 - q1, 1), "sec\n")
+  cat("  Mean (before removal):", round(mean_before, 1), "sec (", round(mean_before/60, 1), "min)\n")
+  cat("\nFences (whiskers):\n")
+  cat("  Lower fence: ≥", round(lower_fence, 1), "sec (", round(lower_fence/60, 1), "min)\n")
+  cat("  Upper fence: ≤", round(upper_fence, 1), "sec (", round(upper_fence/60, 1), "min)\n")
+  cat("\nOutlier summary:\n")
+  cat("  Number of outliers:", length(outliers), "\n")
+  if (length(outliers) > 0) {
+    cat("  Range of outliers:", round(min(outliers), 1), "-", round(max(outliers), 1), 
+        "sec (", round(min(outliers)/60, 1), "-", round(max(outliers)/60, 1), "min)\n")
+  }
+  cat("\nRows removed:", n_removed, "(", round(100 * n_removed / n_before, 1), "%)\n")
+  cat("Rows retained:", n_after, "\n")
+  cat("Mean after removal:", round(mean_after, 1), "sec (", round(mean_after/60, 1), "min)\n")
+  cat("=================================================\n\n")
+}
+
 # Apply time window filtering if requested
 if (!is.null(LAST_N_WEEKS)) {
   # Find the cutoff week
@@ -118,6 +179,36 @@ if (!is.null(LAST_N_WEEKS)) {
     cat("Students in filtered data:", n_students_after, "\n")
     cat("=====================================\n\n")
   }
+}
+
+# Apply student sampling if requested
+if (STUDENT_SAMPLE_PERCENT < 100) {
+  # Get all unique students
+  all_students <- unique(d_with_week_id$anon_student_id)
+  n_total_students <- length(all_students)
+  
+  # Calculate how many students to keep
+  n_keep <- ceiling(n_total_students * STUDENT_SAMPLE_PERCENT / 100)
+  
+  # Set seed for reproducibility
+  set.seed(STUDENT_SAMPLE_SEED)
+  
+  # Sample students deterministically
+  # sort() ensures consistent ordering before sampling
+  sampled_students <- sort(all_students) %>%
+    sample(size = n_keep, replace = FALSE)
+  
+  # Filter data to only sampled students
+  n_before <- nrow(d_with_week_id)
+  d_with_week_id <- d_with_week_id %>%
+    filter(anon_student_id %in% sampled_students)
+  n_after <- nrow(d_with_week_id)
+  
+  cat("\n=== Student Sampling Applied ===\n")
+  cat("Sampling", STUDENT_SAMPLE_PERCENT, "% of students (seed =", STUDENT_SAMPLE_SEED, ")\n")
+  cat("Students:", n_total_students, "->", n_keep, "\n")
+  cat("Rows:", n_before, "->", n_after, "(", round(100 * n_after / n_before, 1), "% retained)\n")
+  cat("=================================\n\n")
 }
 
 # Print sample of weekly data
@@ -171,6 +262,12 @@ if (USE_CACHED_MODEL && file_exists(model_path)) {
   cat("Fitting AFM model (this may take several minutes)...\n")
   if (!is.null(LAST_N_WEEKS)) {
     cat("📅 Using data from last", LAST_N_WEEKS, "weeks only\n")
+  }
+  if (STUDENT_SAMPLE_PERCENT < 100) {
+    cat("👥 Using", STUDENT_SAMPLE_PERCENT, "% sample of students\n")
+  }
+  if (REMOVE_DURATION_OUTLIERS) {
+    cat("🔧 Duration outliers removed using Tukey's fences (k=", TUKEY_K, ")\n", sep = "")
   }
   cat("Data size:", nrow(d_afm), "observations\n")
   cat("Number of students:", n_distinct(d_afm$anon_student_id), "\n")
@@ -290,7 +387,44 @@ proficiency_estimates <- prediction_data %>%
 proficiency_estimates |> head(5) |> knitr::kable()
 ```
 
-# 9. Create behavioral aggregations and calculate proficiency metric
+# 9. Calculate student-week difficulty
+
+Calculate difficulty by weighting skill easiness by encounter frequency each week:
+
+```{r}
+# Calculate skill encounter frequency (delta of n_opportunities) per student-week
+skill_encounters_per_week <- d_afm %>%
+  group_by(anon_student_id, week_id, kc_sub_skills) %>%
+  summarise(
+    encounters_this_week = n(),  # Number of times this skill was encountered this week
+    .groups = "drop"
+  )
+
+# Calculate weighted week easiness, then flip to get difficulty
+week_difficulty <- skill_encounters_per_week %>%
+  # Join with skill easiness values
+  left_join(skill_easyness, by = "kc_sub_skills") %>%
+  # Calculate weighted average easiness per student-week
+  group_by(anon_student_id, week_id) %>%
+  summarise(
+    # Weighted average: sum(easiness * encounters) / sum(encounters)
+    week_easiness = sum(easyness * encounters_this_week) / sum(encounters_this_week),
+    total_skill_encounters = sum(encounters_this_week),
+    n_unique_skills = n(),
+    .groups = "drop"
+  ) %>%
+  # Flip sign to get difficulty
+  mutate(
+    week_difficulty = -week_easiness
+  ) %>%
+  select(anon_student_id, week_id, week_difficulty, total_skill_encounters, n_unique_skills)
+
+# Print sample of week difficulty calculations
+cat("Student-week difficulty metrics:\n")
+week_difficulty |> head(5) |> knitr::kable() |> print()
+```
+
+# 10. Create behavioral aggregations and calculate proficiency metric
 
 First, create the student-week behavioral metrics that we'll need for the final output:
 The decision is to use the original data, not continuing from the cleaned skills data.
@@ -375,7 +509,7 @@ if (PROFICIENCY_METHOD == "mean") {
 avg_proficiency |> head(5) |> knitr::kable()
 ```
 
-# 10. combine all metrics
+# 11. combine all metrics
 
 ```{r}
 
@@ -383,6 +517,7 @@ avg_proficiency |> head(5) |> knitr::kable()
 final_aggregation <- student_week_basic %>%
   select(anon_student_id, week_id, minutes_per_week, problems_solved, total_opportunities) %>%
   left_join(avg_proficiency, by = c("anon_student_id", "week_id")) %>%
+  left_join(week_difficulty, by = c("anon_student_id", "week_id")) %>%
   # pretty sure I designed week_id to follow chronologically when sorted lexicographically
   arrange(anon_student_id, week_id)
 
@@ -393,10 +528,10 @@ cat("  Unique students:", n_distinct(final_aggregation$anon_student_id), "\n")
 cat("  Date range:", min(final_aggregation$week_id), "to", max(final_aggregation$week_id), "\n")
 cat("\nMetric summaries:\n")
 print(summary(select(final_aggregation, minutes_per_week, problems_solved, 
-                    total_opportunities, avg_proficiency)))
+                    total_opportunities, avg_proficiency, week_difficulty)))
 ```
 
-# 11. save output
+# 12. save output
 
 ```{r}
 write_csv(final_aggregation, OUTPUT_FILE)

@@ -19,8 +19,14 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
 ```{r}
 DATA_PATH    <- "All_Data_1884_2013_0215_193821.csv"
-AFM_DIR      <- "afm_outputs_what"
-OUTPUT_FILE  <- "student_week_aggregations_what.csv"
+AFM_DIR      <- "afm_outputs_combined"
+OUTPUT_FILE  <- "student_week_aggregations_combined.csv"
+
+# Create output directory if it doesn't exist
+if (!dir.exists(AFM_DIR)) {
+  dir.create(AFM_DIR, recursive = TRUE)
+  cat("Created output directory:", AFM_DIR, "\n")
+}
 ```
 
 # Key variables
@@ -312,10 +318,16 @@ print(summary(m_afm))
 
 # Student abilities and individual learning rates
 student_effects <- ranef(m_afm)$anon_student_id
+fixed_effects <- fixef(m_afm)
+global_intercept <- fixed_effects["(Intercept)"]
+global_learning_rate <- fixed_effects["n_opportunity"]
+
 student_abilities <- tibble(
   anon_student_id = rownames(student_effects),
-  ability = student_effects[,1],
-  learning_rate = student_effects[,2]
+  ability_deviation = student_effects[,1],                    # Random effect (deviation)
+  learning_rate_deviation = student_effects[,2],              # Random effect (deviation)
+  ability = global_intercept + student_effects[,1],           # Total ability
+  learning_rate = global_learning_rate + student_effects[,2]  # Total learning rate
 )
 
 # Skill easiness
@@ -408,16 +420,24 @@ week_difficulty <- skill_encounters_per_week %>%
   group_by(anon_student_id, week_id) %>%
   summarise(
     # Weighted average: sum(easiness * encounters) / sum(encounters)
-    week_easiness = sum(easyness * encounters_this_week) / sum(encounters_this_week),
-    total_skill_encounters = sum(encounters_this_week),
+    week_easiness = sum(easyness * encounters_this_week, na.rm = TRUE) / sum(encounters_this_week, na.rm = TRUE),
+    total_skill_encounters = sum(encounters_this_week, na.rm = TRUE),
     n_unique_skills = n(),
     .groups = "drop"
   ) %>%
   # Flip sign to get difficulty
   mutate(
-    week_difficulty = -week_easiness
+    week_difficulty = -week_easiness,
+    # Replace NaN with NA (occurs when student has no valid skills in a week)
+    week_difficulty = if_else(is.nan(week_difficulty), NA_real_, week_difficulty)
   ) %>%
   select(anon_student_id, week_id, week_difficulty, total_skill_encounters, n_unique_skills)
+
+# Debug
+cat("\nWeek difficulty calculation:\n")
+cat("  Rows in week_difficulty:", nrow(week_difficulty), "\n")
+cat("  Any NaN values in week_difficulty:", any(is.nan(week_difficulty$week_difficulty)), "\n")
+cat("  Any NA values in week_difficulty:", sum(is.na(week_difficulty$week_difficulty)), "\n")
 
 # Print sample of week difficulty calculations
 cat("Student-week difficulty metrics:\n")
@@ -513,13 +533,27 @@ avg_proficiency |> head(5) |> knitr::kable()
 
 ```{r}
 
-# TODO: check if this is correct
+# Combine all metrics
+cat("\nCombining final metrics:\n")
+cat("  Rows in student_week_basic:", nrow(student_week_basic), "\n")
+cat("  Rows in avg_proficiency:", nrow(avg_proficiency), "\n")  
+cat("  Rows in week_difficulty:", nrow(week_difficulty), "\n")
+
+# Prepare student abilities for joining (these are global, not week-specific in static model)
+student_abilities_for_join <- student_abilities %>%
+  select(anon_student_id, student_ability = ability, student_learning_rate = learning_rate)
+
 final_aggregation <- student_week_basic %>%
   select(anon_student_id, week_id, minutes_per_week, problems_solved, total_opportunities) %>%
   left_join(avg_proficiency, by = c("anon_student_id", "week_id")) %>%
   left_join(week_difficulty, by = c("anon_student_id", "week_id")) %>%
+  left_join(student_abilities_for_join, by = "anon_student_id") %>%  # No week_id since it's global
   # pretty sure I designed week_id to follow chronologically when sorted lexicographically
   arrange(anon_student_id, week_id)
+
+cat("  Rows in final_aggregation:", nrow(final_aggregation), "\n")
+cat("  Columns:", paste(names(final_aggregation), collapse = ", "), "\n")
+cat("  week_difficulty column exists:", "week_difficulty" %in% names(final_aggregation), "\n")
 
   # Summary statistics
 cat("\nSummary of student-week aggregations:\n")
@@ -527,16 +561,40 @@ cat("  Total student-weeks:", nrow(final_aggregation), "\n")
 cat("  Unique students:", n_distinct(final_aggregation$anon_student_id), "\n")
 cat("  Date range:", min(final_aggregation$week_id), "to", max(final_aggregation$week_id), "\n")
 cat("\nMetric summaries:\n")
-print(summary(select(final_aggregation, minutes_per_week, problems_solved, 
-                    total_opportunities, avg_proficiency, week_difficulty)))
+if ("week_difficulty" %in% names(final_aggregation)) {
+  print(summary(select(final_aggregation, minutes_per_week, problems_solved, 
+                      total_opportunities, avg_proficiency, week_difficulty, 
+                      student_ability, student_learning_rate)))
+} else {
+  cat("WARNING: week_difficulty not found in final_aggregation!\n")
+  print(summary(select(final_aggregation, minutes_per_week, problems_solved, 
+                      total_opportunities, avg_proficiency,
+                      student_ability, student_learning_rate)))
+}
 ```
 
 # 12. save output
 
 ```{r}
-write_csv(final_aggregation, OUTPUT_FILE)
+# Debug: Check if week_difficulty exists before saving
+if ("week_difficulty" %in% names(final_aggregation)) {
+  cat("week_difficulty column exists in data frame\n")
+  cat("Number of non-NA week_difficulty values:", sum(!is.na(final_aggregation$week_difficulty)), "\n")
+  cat("Number of NA week_difficulty values:", sum(is.na(final_aggregation$week_difficulty)), "\n")
+} else {
+  cat("WARNING: week_difficulty column is missing!\n")
+}
+
+# Ensure all columns are present
+final_aggregation_complete <- final_aggregation %>%
+  mutate(
+    week_difficulty = if ("week_difficulty" %in% names(.)) week_difficulty else NA_real_
+  )
+
+write_csv(final_aggregation_complete, OUTPUT_FILE)
 
 cat("Saved output to", OUTPUT_FILE, "\n")
+cat("Columns in output:", paste(names(final_aggregation_complete), collapse = ", "), "\n")
 ```
 
 

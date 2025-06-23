@@ -21,8 +21,8 @@ library(lubridate)
 library(stringr)
 library(tibble)
 
-# Load the student-week aggregations
-data <- read_csv("student_week_aggregations2.csv")
+# Load the student-week aggregations (now using rolling window data with additional metrics)
+data <- read_csv("student_week_aggregations_rolling_new.csv")
 
 # Basic data info
 cat("Data dimensions:", nrow(data), "rows,", ncol(data), "columns\n")
@@ -257,12 +257,58 @@ print(box_plot)
 opportunities_stats <- generate_summary_stats(data, "total_opportunities", "Total Opportunities")
 ```
 
+## Week Difficulty Analysis
+
+```{r week-difficulty-analysis}
+heatmap_result <- create_heatmap(data, "week_difficulty", "Difficulty")
+print(heatmap_result$plot)
+
+line_plot <- create_line_plot(data, "week_difficulty", "Difficulty", heatmap_result$sampled_students)
+print(line_plot)
+
+box_plot <- create_box_plot(data, "week_difficulty", "Difficulty")
+print(box_plot)
+
+difficulty_stats <- generate_summary_stats(data, "week_difficulty", "Difficulty")
+```
+
+## Student Ability Analysis
+
+```{r student-ability-analysis}
+heatmap_result <- create_heatmap(data, "student_ability", "Ability")
+print(heatmap_result$plot)
+
+line_plot <- create_line_plot(data, "student_ability", "Ability", heatmap_result$sampled_students)
+print(line_plot)
+
+box_plot <- create_box_plot(data, "student_ability", "Ability")
+print(box_plot)
+
+ability_stats <- generate_summary_stats(data, "student_ability", "Ability")
+```
+
+## Student Learning Rate Analysis
+
+```{r learning-rate-analysis}
+heatmap_result <- create_heatmap(data, "student_learning_rate", "Learning Rate")
+print(heatmap_result$plot)
+
+line_plot <- create_line_plot(data, "student_learning_rate", "Learning Rate", heatmap_result$sampled_students)
+print(line_plot)
+
+box_plot <- create_box_plot(data, "student_learning_rate", "Learning Rate")
+print(box_plot)
+
+learning_rate_stats <- generate_summary_stats(data, "student_learning_rate", "Learning Rate")
+```
+
 ## Correlation Analysis
 
 ```{r correlation-analysis}
-# Create correlation matrix for all metrics
+# Create correlation matrix for all metrics (including new AFM metrics)
 correlation_data <- data %>%
-  select(avg_proficiency, minutes_per_week, problems_solved, total_opportunities) %>%
+  select(avg_proficiency, minutes_per_week, problems_solved, total_opportunities, 
+         week_difficulty, student_ability, student_learning_rate) %>%
   filter(complete.cases(.))
 
 cor_matrix <- cor(correlation_data)
@@ -273,24 +319,55 @@ cor_melted <- cor_matrix %>%
   rownames_to_column("Var1") %>%
   pivot_longer(-Var1, names_to = "Var2", values_to = "value")
 
+# Format variable names for better display
+cor_melted <- cor_melted %>%
+  mutate(
+    Var1 = gsub("_", " ", str_to_title(Var1)),
+    Var2 = gsub("_", " ", str_to_title(Var2))
+  )
+
 p_cor <- ggplot(cor_melted, aes(x = Var1, y = Var2, fill = value)) +
   geom_tile(color = "white") +
   scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
                        midpoint = 0, limit = c(-1, 1), space = "Lab", 
                        name="Correlation") +
-  geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
   labs(
-    title = "Correlation Matrix of Student Weekly Metrics",
+    title = "Correlation Matrix of Student Weekly Metrics (Including AFM Parameters)",
+    subtitle = "Includes proficiency, engagement metrics, and AFM-derived difficulty/ability measures",
     x = "", y = ""
   ) +
   theme_minimal() +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    plot.title = element_text(size = 14, face = "bold")
-  )
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    axis.text.y = element_text(size = 9),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "right"
+  ) +
+  coord_fixed()  # Keep aspect ratio square
 
 print(p_cor)
 
 cat("Correlation Matrix:\n")
 print(round(cor_matrix, 3))
+
+# Additional analysis: strongest correlations with new metrics
+cat("\n\nStrongest correlations with new AFM metrics:\n")
+cor_df <- as.data.frame(cor_matrix)
+
+# Week difficulty correlations
+cat("\nWeek Difficulty correlations:\n")
+week_diff_cors <- sort(cor_df$week_difficulty[names(cor_df) != "week_difficulty"], decreasing = TRUE)
+print(round(week_diff_cors, 3))
+
+# Student ability correlations
+cat("\nStudent Ability correlations:\n")
+student_ability_cors <- sort(cor_df$student_ability[names(cor_df) != "student_ability"], decreasing = TRUE)
+print(round(student_ability_cors, 3))
+
+# Student learning rate correlations
+cat("\nStudent Learning Rate correlations:\n")
+learning_rate_cors <- sort(cor_df$student_learning_rate[names(cor_df) != "student_learning_rate"], decreasing = TRUE)
+print(round(learning_rate_cors, 3))
 ``` 

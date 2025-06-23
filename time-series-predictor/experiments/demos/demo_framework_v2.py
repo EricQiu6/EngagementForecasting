@@ -15,10 +15,10 @@ import numpy as np
 from pathlib import Path
 
 # Add framework to path
-sys.path.append(str(Path(__file__).parent / 'framework_v2'))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 # Framework imports
-from framework_v2 import (
+from src.framework import (
     StudentTimeSeriesDataset, 
     SKLearnAdapter, 
     PyTorchAdapter,
@@ -34,27 +34,32 @@ from sklearn.ensemble import RandomForestRegressor
 # PyTorch models
 import torch
 import torch.nn as nn
-from framework_v2.models.neural_nets import SimpleLSTM, SimpleMLP, create_model
+from src.framework.models.neural_nets import SimpleLSTM, SimpleMLP, create_model
 
 
 def demo_sklearn_models():
     """Demonstrate sklearn models with the new framework."""
     print("="*60)
-    print("🔬 SKLEARN MODELS DEMO")
+    print("🔬 SKLEARN MODELS DEMO - Predicting Average Proficiency")
     print("="*60)
     
-    # Create dataset
-    data_path = 'data/data_tidied.csv'
+    # Create dataset - now using the richer student week data
+    data_path = '../data-analysis/student_week_aggregations_rolling.csv'
     if not os.path.exists(data_path):
-        data_path = '~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv'
+        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv'
     
     dataset = StudentTimeSeriesDataset(
         data_path=data_path,
         sequence_length=5,
+        target_column='avg_proficiency',
+        student_column='anon_student_id', 
+        time_column='week_id',
         load_in_memory=True
     )
     
     print(f"📊 Dataset loaded: {len(dataset)} sequences")
+    print(f"🎯 Target: Predicting avg_proficiency (new skills to master)")
+    print(f"📈 Features: week_id, minutes_per_week, problems_solved, total_opportunities, prev_proficiency")
     
     # Test different sklearn models
     sklearn_models = [
@@ -67,7 +72,7 @@ def demo_sklearn_models():
     for name, sklearn_model in sklearn_models:
         print(f"\n🔍 Testing {name}")
         
-        # Wrap in adapter
+        # Wrap in adapter - using larger window for richer features
         model = SKLearnAdapter(sklearn_model, lag_window=5)
         
         # Cross-validate (using fewer folds for demo)
@@ -86,7 +91,7 @@ def demo_sklearn_models():
 def demo_pytorch_models():
     """Demonstrate PyTorch models with the new framework."""
     print("\n" + "="*60)
-    print("🧠 PYTORCH MODELS DEMO")
+    print("🧠 PYTORCH MODELS DEMO - Predicting Average Proficiency")
     print("="*60)
     
     # Show device info
@@ -94,23 +99,29 @@ def demo_pytorch_models():
     device = get_device()
     print(f"🖥️  Using device: {device}")
     
-    # Create dataset
-    data_path = 'data/data_tidied.csv'
+    # Create dataset - now using the richer student week data
+    data_path = '../data-analysis/student_week_aggregations_rolling.csv'
     if not os.path.exists(data_path):
-        data_path = '~/cmu/goalsetting-recommendation-algorithm/time-series-predictor/data/data_tidied.csv'
+        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv'
     
     dataset = StudentTimeSeriesDataset(
         data_path=data_path,
         sequence_length=5,
+        target_column='avg_proficiency',
+        student_column='anon_student_id',
+        time_column='week_id',
         load_in_memory=True
     )
     
-    # Test different PyTorch models
+    print(f"🎯 Target: Predicting avg_proficiency (new skills to master)")
+    print(f"📈 Features: week_id, minutes_per_week, problems_solved, total_opportunities, prev_proficiency")
+    
+    # Test different PyTorch models - adjusted input sizes for actual data (6 features)
     pytorch_models = [
-        ("Simple MLP", SimpleMLP(input_size=10, hidden_sizes=[32, 16])),
-        ("LSTM", SimpleLSTM(input_size=2, hidden_size=32, num_layers=2)),
-        ("CNN", create_model('cnn', input_size=2, num_filters=[16, 32])),
-        ("DLinear", create_model('dlinear', input_size=2, seq_len=5)),
+        ("Simple MLP", SimpleMLP(input_size=30, hidden_sizes=[32, 16])),  # 6 features * 5 timesteps
+        ("LSTM", SimpleLSTM(input_size=6, hidden_size=32, num_layers=2)),  # 6 features per timestep
+        ("CNN", create_model('cnn', input_size=6, num_filters=[16, 32])),  # 6 features per timestep
+        ("DLinear", create_model('dlinear', input_size=6, seq_len=5)),     # 6 features, 5 timesteps
     ]
     
     results = {}
@@ -156,13 +167,13 @@ def demo_advanced_features():
     
     print("💾 Testing model save/load functionality...")
     
-    # Create and train a model
-    pytorch_model = SimpleLSTM(input_size=2, hidden_size=16, num_layers=1)
+    # Create and train a model - adjusted for actual input size (6 features)
+    pytorch_model = SimpleLSTM(input_size=6, hidden_size=16, num_layers=1)
     model = PyTorchAdapter(pytorch_model, device=get_device())
     
-    # Create some dummy data
-    X_dummy = np.random.randn(100, 5, 2)
-    y_dummy = np.random.randn(100)
+    # Create some dummy data - 6 features now
+    X_dummy = np.random.randn(100, 5, 6)  # 100 samples, 5 timesteps, 6 features
+    y_dummy = np.random.randn(100)         # target proficiency scores
     
     # Train briefly
     print("🏋️  Training model...")
@@ -174,7 +185,7 @@ def demo_advanced_features():
     print(f"   💾 Model saved to {model_path}")
     
     # Create new model and load
-    new_pytorch_model = SimpleLSTM(input_size=2, hidden_size=16, num_layers=1)
+    new_pytorch_model = SimpleLSTM(input_size=6, hidden_size=16, num_layers=1)
     new_model = PyTorchAdapter(new_pytorch_model, device=get_device())
     new_model.load(str(model_path))
     print("   📂 Model loaded successfully")
@@ -212,8 +223,9 @@ def compare_frameworks():
 
 def main():
     """Run all demos."""
-    print("🚀 Framework V2 Demo")
-    print("🎯 Demonstrating scalable time series prediction framework")
+    print("🚀 Framework V2 Demo - Predicting Student Proficiency")
+    print("🎯 Demonstrating prediction of avg_proficiency (new skills students will master)")
+    print("📚 Using rich student behavioral data: study time, problems solved, learning opportunities")
     
     try:
         # Demo sklearn models
@@ -239,6 +251,8 @@ def main():
         print("="*60)
         
         print("✅ Successfully demonstrated:")
+        print("   • Predicting avg_proficiency (new skills to master)")
+        print("   • Rich feature engineering (study time, problems, opportunities)")
         print("   • SKLearn model integration")
         if pytorch_results:
             print("   • PyTorch model integration") 
@@ -247,7 +261,8 @@ def main():
         print("   • Model save/load functionality")
         print("   • Backwards compatibility")
         
-        print("\n🎉 Framework V2 demo completed successfully!")
+        print("\n🎉 Student proficiency prediction demo completed successfully!")
+        print("🔬 Models can now predict how many new skills students will master!")
         
     except Exception as e:
         print(f"\n❌ Demo failed with error: {e}")

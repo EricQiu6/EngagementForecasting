@@ -175,48 +175,49 @@ class CrossValidator:
             return dataloader
     
     def _get_fold_data_numpy(self, indices):
-        """Extract data as numpy arrays directly for sklearn models using pandas (FAST PATH)."""
-        # Get the weeks corresponding to these sequence indices
-        target_weeks = set()
+        """Extract data as numpy arrays directly for sklearn models (OPTIMIZED PATH)."""
+        # Use the dataset's preprocessing by getting individual samples
+        X_list = []
+        y_list = []
+        
         for idx in indices:
-            seq_info = self.dataset.sequence_index[idx]
-            target_weeks.add(seq_info['target_week'])
-        
-        # Load data directly from CSV (use cached version if dataset has it)
-        if hasattr(self.dataset, 'data') and self.dataset.data is not None:
-            data = self.dataset.data
-        else:
-            import pandas as pd
-            import os
-            data_path = os.path.expanduser(self.dataset.data_path)
-            data = pd.read_csv(data_path)
-        
-        # Use the old framework's efficient _prepare_features approach
-        features = []
-        targets = []
-        lag_window = getattr(self.model, 'lag_window', 5)
-        
-        for student in data[self.dataset.student_column].unique():
-            student_data = data[data[self.dataset.student_column] == student].sort_values(self.dataset.time_column)
+            features, target = self.dataset[idx]
             
-            # Create lag features for each student
-            for i in range(lag_window, len(student_data)):
-                current_week = student_data.iloc[i][self.dataset.time_column]
-                
-                # Only include samples whose target week is in our fold
-                if current_week in target_weeks:
-                    row_features = [current_week]  # Current week
-                    
-                    # Add lag features
-                    for lag in range(1, lag_window + 1):
-                        row_features.append(student_data.iloc[i-lag][self.dataset.target_column])
-                    
-                    target = student_data.iloc[i][self.dataset.target_column]
-                    
-                    features.append(row_features)
-                    targets.append(target)
+            # Convert to numpy and flatten features for sklearn
+            features_np = features.numpy()  # Shape: (seq_len, n_features)
+            target_np = target.numpy().item()  # Single value
+            
+            # For sklearn, we need to flatten the sequence into a feature vector
+            # Extract features similar to sklearn adapter approach
+            seq_len, n_features = features_np.shape
+            lag_window = getattr(self.model, 'lag_window', 5)
+            
+            # Extract week (first column of last timestep)
+            week = features_np[-1, 0]
+            
+            # Extract lag features (target column from all timesteps)
+            if n_features >= 5:  # We have 5 features: week, minutes, problems, opportunities, prev_proficiency
+                lags_all = features_np[:, 4]  # Previous proficiency values (last column)
+            else:
+                lags_all = features_np[:, -1]  # Last column as fallback
+            
+            # Handle lag window sizing
+            if seq_len > lag_window:
+                # Take last lag_window values
+                lags_processed = lags_all[-lag_window:]
+            elif seq_len < lag_window:
+                # Pad with zeros at the beginning
+                lags_processed = np.pad(lags_all, (lag_window - seq_len, 0), mode='constant', constant_values=0)
+            else:
+                lags_processed = lags_all
+            
+            # Combine features: [week, lag1, lag2, ..., lagN]
+            row_features = np.concatenate([[week], lags_processed])
+            
+            X_list.append(row_features)
+            y_list.append(target_np)
         
-        return np.array(features), np.array(targets)
+        return np.array(X_list), np.array(y_list)
     
     def _extract_targets(self, data):
         """Extract target values from data (DataLoader or numpy arrays)."""

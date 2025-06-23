@@ -5,6 +5,9 @@ from typing import Tuple
 
 # Import DLinear implementation
 from .DLinear import Model as DLinearModel
+from .baselines import DLinearPyTorch
+from .student_ability_model import StudentAbilityLinearModel, StudentAbilityNeuralModel
+from .zero_inflated_model import ZeroInflatedPoissonAdapter, ImprovedStudentModel
 
 
 class SimpleMLP(nn.Module):
@@ -325,25 +328,42 @@ class DLinear(nn.Module):
 # Factory function for easy model creation
 def create_model(model_type: str, **kwargs):
     """
-    Factory function to create models by name.
+    Factory function to create models.
     
     Args:
-        model_type: Type of model ('mlp', 'lstm', 'cnn', 'attention_lstm', 'transformer', 'dlinear')
-        **kwargs: Model-specific parameters
+        model_type: Type of model ('mlp', 'lstm', 'cnn', 'attention_lstm', 'transformer', 'dlinear', 'dlinear_simple',
+                   'student_ability_linear', 'student_ability_neural', 'zip', 'improved_student')
+        **kwargs: Model-specific arguments
+        
+    DLinear Options:
+        - 'dlinear': Original research implementation with full series decomposition (18 params)
+        - 'dlinear_simple': Simplified custom implementation (12 params)
         
     Returns:
         PyTorch model instance
     """
-    models = {
-        'mlp': SimpleMLP,
-        'lstm': SimpleLSTM,
-        'cnn': TimeSeriesCNN,
-        'attention_lstm': AttentionLSTM,
-        'transformer': SimpleTransformer,
-        'dlinear': DLinear
-    }
     
-    if model_type not in models:
-        raise ValueError(f"Unknown model type: {model_type}. Available: {list(models.keys())}")
-    
-    return models[model_type](**kwargs) 
+    if model_type == 'mlp':
+        return SimpleMLP(**kwargs)
+    elif model_type == 'lstm':
+        return SimpleLSTM(**kwargs)
+    elif model_type == 'cnn':
+        return TimeSeriesCNN(**kwargs)
+    elif model_type == 'attention_lstm':
+        return AttentionLSTM(**kwargs)
+    elif model_type == 'transformer':
+        return SimpleTransformer(**kwargs)
+    elif model_type == 'dlinear':
+        return DLinear(**kwargs)
+    elif model_type == 'dlinear_simple':
+        return DLinearPyTorch(**kwargs)
+    elif model_type == 'student_ability_linear':
+        return StudentAbilityLinearModel(**kwargs)
+    elif model_type == 'student_ability_neural':
+        return StudentAbilityNeuralModel(**kwargs)
+    elif model_type == 'zip':
+        return ZeroInflatedPoissonAdapter(**kwargs)
+    elif model_type == 'improved_student':
+        return ImprovedStudentModel(**kwargs)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}") 

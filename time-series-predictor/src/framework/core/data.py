@@ -16,6 +16,30 @@ except ImportError:
     print("Warning: Could not import legacy data processing. Some features may not work.")
 
 
+def week_string_to_numeric(week_str):
+    """Convert week string like '2011-W36' to a numeric representation."""
+    if pd.isna(week_str) or week_str == 'NA':
+        return 0
+    try:
+        if isinstance(week_str, str) and '-W' in week_str:
+            year, week = week_str.split('-W')
+            return int(year) * 100 + int(week)
+        else:
+            return float(week_str) if week_str != 'NA' else 0
+    except:
+        return 0
+
+
+def safe_float_conversion(value):
+    """Safely convert value to float, handling NA strings."""
+    if pd.isna(value) or value == 'NA' or value == '':
+        return 0.0
+    try:
+        return float(value)
+    except:
+        return 0.0
+
+
 class StudentTimeSeriesDataset(Dataset):
     """
     Scalable dataset for student time series data.
@@ -25,17 +49,17 @@ class StudentTimeSeriesDataset(Dataset):
     def __init__(self, 
                  data_path: str,
                  sequence_length: int = 5,
-                 target_column: str = 'proficient',
-                 student_column: str = 'name',
-                 time_column: str = 'week',
+                 target_column: str = 'avg_proficiency',
+                 student_column: str = 'anon_student_id',
+                 time_column: str = 'week_id',
                  load_in_memory: bool = True):
         """
         Args:
             data_path: Path to the CSV data file
             sequence_length: Number of historical steps to include
-            target_column: Column name for target variable
-            student_column: Column name for student identifier
-            time_column: Column name for time identifier
+            target_column: Column name for target variable (default: avg_proficiency)
+            student_column: Column name for student identifier (default: anon_student_id)
+            time_column: Column name for time identifier (default: week_id)
             load_in_memory: Whether to load all data in memory (False for large datasets)
         """
         self.data_path = data_path
@@ -115,11 +139,52 @@ class StudentTimeSeriesDataset(Dataset):
         
         features = []
         for _, row in sequence_data.iterrows():
-            # Include week number and proficiency score
-            features.append([row[self.time_column], row[self.target_column]])
+            # Include relevant features for predicting proficiency
+            feature_vector = []
+            
+            # Time-based features - convert week string to numeric
+            if self.time_column in row:
+                feature_vector.append(week_string_to_numeric(row[self.time_column]))
+            
+            # Study behavior features - safely convert to float
+            if 'minutes_per_week' in row:
+                feature_vector.append(safe_float_conversion(row['minutes_per_week']))
+            
+            if 'problems_solved' in row:
+                feature_vector.append(safe_float_conversion(row['problems_solved']))
+                
+            if 'total_opportunities' in row:
+                feature_vector.append(safe_float_conversion(row['total_opportunities']))
+            
+            # Previous proficiency - safely convert to float
+            if self.target_column in row:
+                feature_vector.append(safe_float_conversion(row[self.target_column]))
+            
+            # Additional features for student ability model
+            if 'n_skills_measured' in row:
+                feature_vector.append(safe_float_conversion(row['n_skills_measured']))
+            
+            if 'week_difficulty' in row:
+                feature_vector.append(safe_float_conversion(row['week_difficulty']))
+                
+            if 'student_ability' in row:
+                feature_vector.append(safe_float_conversion(row['student_ability']))
+                
+            if 'student_learning_rate' in row:
+                feature_vector.append(safe_float_conversion(row['student_learning_rate']))
+            
+            # If we have fewer features than expected, pad with basic features
+            if len(feature_vector) < 2:
+                # Fallback to basic features for compatibility
+                feature_vector = [
+                    week_string_to_numeric(row[self.time_column]) if self.time_column in row else 0,
+                    safe_float_conversion(row[self.target_column]) if self.target_column in row else 0
+                ]
+            
+            features.append(feature_vector)
         
-        # Target: next value
-        target = student_data.iloc[end_idx][self.target_column]
+        # Target: next proficiency value - safely convert to float
+        target = safe_float_conversion(student_data.iloc[end_idx][self.target_column])
         
         return torch.tensor(features, dtype=torch.float32), torch.tensor([target], dtype=torch.float32)
     

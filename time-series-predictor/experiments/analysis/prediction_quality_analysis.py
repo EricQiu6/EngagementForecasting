@@ -19,7 +19,7 @@ import math
 
 # Load and prepare data (simplified version of our main pipeline)
 print("Loading data and preparing features...")
-df = pd.read_csv('../data-analysis/student_week_aggregations_rolling.csv')
+df = pd.read_csv('/Users/ericq/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv')
 df['week_date'] = pd.to_datetime(df['week_id'] + '-1', format='%Y-W%W-%w')
 df = df.sort_values(['anon_student_id', 'week_date'])
 

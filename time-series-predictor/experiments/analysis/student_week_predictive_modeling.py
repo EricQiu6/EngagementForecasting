@@ -64,9 +64,9 @@ def create_model(model_type: str, **kwargs):
     else:
         # Try to import neural network models
         try:
-            from framework_v2.models.neural_nets import create_model as create_nn_model
+            from src.framework.models.neural_nets import create_model as create_nn_model
             return create_nn_model(model_type, **kwargs)
-        except:
+        except Exception:
             raise ValueError(f"Unknown model type: {model_type}")
 
 # Import metrics from sklearn
@@ -95,7 +95,7 @@ def evaluate_predictions(y_true, y_pred):
 
 # Load the dataset
 print("Loading student_week_aggregations_rolling.csv...")
-df = pd.read_csv('../data-analysis/student_week_aggregations_rolling.csv')
+df = pd.read_csv('../../../data-analysis/student_week_aggregations_rolling_new.csv')
 
 # Parse week dates
 df['week_date'] = pd.to_datetime(df['week_id'] + '-1', format='%Y-W%W-%w')
@@ -257,8 +257,8 @@ if active_students:
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig('individual_student_predictions.png', dpi=300)
-        print("Saved individual student predictions plot")
+        plt.savefig('../outputs/individual_student_predictions.png', dpi=300)
+        print("Saved individual student predictions plot to outputs/")
 
 # ========================================================================
 # APPROACH 3: Sequence-to-Sequence Prediction (Using Our Framework)
@@ -427,7 +427,7 @@ The student_week_aggregations_rolling dataset can be used for several predictive
 
 # Save results summary
 results_df = pd.DataFrame(results).T
-results_df.to_csv('panel_model_results.csv')
-print("\nSaved model results to panel_model_results.csv")
+results_df.to_csv('../outputs/panel_model_results.csv')
+print("\nSaved model results to outputs/panel_model_results.csv")
 
 print("\n=== Predictive Modeling Complete ===") 

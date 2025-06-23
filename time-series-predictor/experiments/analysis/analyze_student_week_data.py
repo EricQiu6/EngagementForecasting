@@ -5,8 +5,8 @@ import seaborn as sns
 from datetime import datetime
 
 # Load the dataset
-print("Loading student_week_aggregations_rolling.csv...")
-df = pd.read_csv('../data-analysis/student_week_aggregations_rolling.csv')
+print("Loading student_week_aggregations_rolling_new.csv...")
+df = pd.read_csv('../data-analysis/student_week_aggregations_rolling_new.csv')
 
 print("\n=== Dataset Overview ===")
 print(f"Shape: {df.shape}")

@@ -8,15 +8,15 @@ import os
 from pathlib import Path
 
 # Add framework to path
-sys.path.append(str(Path(__file__).parent / 'framework_v2'))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from framework_v2 import (
+from src.framework import (
     StudentTimeSeriesDataset, 
     PyTorchAdapter,
     CrossValidator,
     get_device
 )
-from framework_v2.models.neural_nets import create_model
+from src.framework.models.neural_nets import create_model
 
 
 def test_improved_models():
@@ -28,9 +28,7 @@ def test_improved_models():
     device = get_device()
     
     # Create dataset
-    data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
-    if not os.path.exists(data_path):
-        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling_new.csv'
+    data_path = '/Users/ericq/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling_new.csv'
     
     dataset = StudentTimeSeriesDataset(
         data_path=data_path,

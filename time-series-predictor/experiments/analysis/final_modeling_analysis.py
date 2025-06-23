@@ -16,8 +16,8 @@ print("Student Week Engagement Prediction")
 print("="*80)
 
 # Load all results
-panel_results = pd.read_csv('panel_model_results.csv', index_col=0)
-detailed_metrics = pd.read_csv('detailed_model_metrics.csv', index_col=0)
+panel_results = pd.read_csv('../outputs/panel_model_results.csv', index_col=0)
+detailed_metrics = pd.read_csv('../outputs/detailed_model_metrics.csv', index_col=0)
 
 print("\n📊 EXECUTIVE SUMMARY")
 print("="*50)
@@ -40,7 +40,7 @@ print(f"- Bias: {detailed_metrics.loc['Random Forest', 'Mean Error']:.1f} minute
 print(f"\n📈 BUSINESS CONTEXT")
 print("="*50)
 # Load original data for context
-df = pd.read_csv('../data-analysis/student_week_aggregations_rolling.csv')
+df = pd.read_csv('/Users/ericq/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv')
 avg_study_time = df['minutes_per_week'].mean()
 std_study_time = df['minutes_per_week'].std()
 median_study_time = df['minutes_per_week'].median()
@@ -287,8 +287,8 @@ Contact: Data Science Team
 Date: {pd.Timestamp.now().strftime('%Y-%m-%d')}
 """
 
-with open('final_analysis_report.txt', 'w') as f:
+with open('../outputs/final_analysis_report.txt', 'w') as f:
     f.write(final_summary)
 
-print(f"\n📄 Saved comprehensive report to 'final_analysis_report.txt'")
+print(f"\n📄 Saved comprehensive report to 'outputs/final_analysis_report.txt'")
 print(f"📊 All analysis files and visualizations are ready for presentation") 

@@ -11,9 +11,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # Add framework to path
-sys.path.append(str(Path(__file__).parent / 'framework_v2'))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from framework_v2 import StudentTimeSeriesDataset
+from src.framework import StudentTimeSeriesDataset
 
 
 def analyze_target_distribution():
@@ -23,7 +23,7 @@ def analyze_target_distribution():
     print("="*60)
     
     # Load raw data
-    data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
+    data_path = '/Users/ericq/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling_new.csv'
     df = pd.read_csv(data_path)
     
     # Basic statistics
@@ -64,8 +64,8 @@ def analyze_target_distribution():
     plt.ylabel('avg_proficiency')
     
     plt.tight_layout()
-    plt.savefig('target_distribution.png')
-    print("\n📊 Saved distribution plots to target_distribution.png")
+    plt.savefig('../outputs/target_distribution.png')
+    print("\n📊 Saved distribution plots to outputs/target_distribution.png")
     
     return df
 
@@ -108,8 +108,8 @@ def analyze_feature_correlations(df):
     
     plt.title('Feature Correlation Matrix')
     plt.tight_layout()
-    plt.savefig('correlation_matrix.png')
-    print("\n📊 Saved correlation matrix to correlation_matrix.png")
+    plt.savefig('../outputs/correlation_matrix.png')
+    print("\n📊 Saved correlation matrix to outputs/correlation_matrix.png")
 
 
 def analyze_temporal_patterns(df):
@@ -144,8 +144,8 @@ def analyze_temporal_patterns(df):
     plt.ylabel('Count')
     
     plt.tight_layout()
-    plt.savefig('temporal_patterns.png')
-    print("\n📊 Saved temporal patterns to temporal_patterns.png")
+    plt.savefig('../outputs/temporal_patterns.png')
+    print("\n📊 Saved temporal patterns to outputs/temporal_patterns.png")
 
 
 def analyze_student_patterns(df):
@@ -179,8 +179,8 @@ def analyze_student_patterns(df):
         plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('student_patterns.png')
-    print("\n📊 Saved student patterns to student_patterns.png")
+    plt.savefig('../outputs/student_patterns.png')
+    print("\n📊 Saved student patterns to outputs/student_patterns.png")
 
 
 def analyze_prediction_difficulty():
@@ -190,7 +190,7 @@ def analyze_prediction_difficulty():
     print("="*60)
     
     # Load dataset
-    data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
+    data_path = '/Users/ericq/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling_new.csv'
     dataset = StudentTimeSeriesDataset(
         data_path=data_path,
         sequence_length=5,

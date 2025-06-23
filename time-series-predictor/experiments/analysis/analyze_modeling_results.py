@@ -17,13 +17,13 @@ print("STUDENT WEEK PREDICTIVE MODELING - RESULTS ANALYSIS")
 print("="*70)
 
 # Load the results
-results_df = pd.read_csv('panel_model_results.csv', index_col=0)
+results_df = pd.read_csv('../outputs/panel_model_results.csv', index_col=0)
 print("\n1. PANEL MODEL PERFORMANCE COMPARISON")
 print("="*50)
 print(results_df.round(3))
 
 # Load the original dataset for context
-df = pd.read_csv('../data-analysis/student_week_aggregations_rolling.csv')
+df = pd.read_csv('/Users/ericq/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv')
 df['week_date'] = pd.to_datetime(df['week_id'] + '-1', format='%Y-W%W-%w')
 
 print(f"\nDataset Context:")
@@ -103,8 +103,8 @@ axes[1, 1].set_ylabel('Error (Minutes)')
 axes[1, 1].tick_params(axis='x', rotation=45)
 
 plt.tight_layout()
-plt.savefig('model_performance_analysis.png', dpi=300, bbox_inches='tight')
-print("Saved performance analysis plot to model_performance_analysis.png")
+plt.savefig('../outputs/model_performance_analysis.png', dpi=300, bbox_inches='tight')
+print("Saved performance analysis plot to outputs/model_performance_analysis.png")
 
 # Business impact analysis
 print("\n4. BUSINESS IMPACT ANALYSIS")
@@ -290,7 +290,7 @@ RECOMMENDATIONS:
 4. Enhance with trend features and ensemble methods
 """
 
-with open('modeling_results_summary.txt', 'w') as f:
+with open('../outputs/modeling_results_summary.txt', 'w') as f:
     f.write(summary_report)
 
-print("\nSaved executive summary to modeling_results_summary.txt") 
+print("\nSaved executive summary to outputs/modeling_results_summary.txt") 

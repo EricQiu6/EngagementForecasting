@@ -16,21 +16,38 @@ Where:
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..core.schema import DataSchema
 
 
 class StudentAbilityLinearModel(nn.Module):
     """
-    Linear regression model incorporating student ability and learning rate.
+    Schema-aware linear regression model incorporating student ability and learning rate.
     """
     
-    def __init__(self, history_window: int = 5):
+    def __init__(self, history_window: int = 5, schema: Optional['DataSchema'] = None):
         """
         Args:
             history_window: Number of past weeks to consider
+            schema: DataSchema defining feature layout (optional for backward compatibility)
         """
         super().__init__()
         self.history_window = history_window
+        self.schema = schema
+        
+        # Build feature indices from schema if provided
+        if schema is not None:
+            self.feature_indices = schema.get_feature_indices()
+            # Validate required features exist
+            required_features = ['student_ability', 'student_learning_rate', 'avg_proficiency', 'week_difficulty']
+            missing_features = [f for f in required_features if f not in self.feature_indices]
+            if missing_features:
+                raise ValueError(f"Schema missing required features: {missing_features}")
+        else:
+            # Fallback to hardcoded indices for backward compatibility
+            self.feature_indices = None
         
         # Model parameters
         self.alpha = nn.Parameter(torch.zeros(1))  # Intercept
@@ -53,44 +70,57 @@ class StudentAbilityLinearModel(nn.Module):
         nn.init.normal_(self.beta_l, mean=0.0, std=0.1)
         nn.init.normal_(self.beta_y, mean=0.0, std=0.1)
         nn.init.normal_(self.beta_d, mean=0.0, std=0.1)
+    
+    def _get_feature_index(self, feature_name: str, fallback_index: int) -> int:
+        """Get feature index from schema or use fallback."""
+        if self.feature_indices is not None:
+            return self.feature_indices[feature_name]
+        else:
+            return fallback_index
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
+        Schema-aware forward pass.
         
         Args:
             x: Input tensor of shape (batch_size, seq_len, n_features)
-               Features expected in order:
-               [0]: week_id (numeric)
-               [1]: minutes_per_week
-               [2]: problems_solved
-               [3]: total_opportunities
-               [4]: avg_proficiency (target variable)
-               [5]: n_skills_measured
-               [6]: week_difficulty
-               [7]: student_ability
-               [8]: student_learning_rate
+               Features are extracted based on schema or fallback to legacy indices
                
         Returns:
             Predictions of shape (batch_size, 1)
         """
         batch_size, seq_len, n_features = x.shape
         
+        # Get feature indices (schema-based or fallback)
+        ability_idx = self._get_feature_index('student_ability', 6)  # Updated fallback
+        learning_rate_idx = self._get_feature_index('student_learning_rate', 7)  # Updated fallback
+        performance_idx = self._get_feature_index('avg_proficiency', 3)  # Updated fallback
+        difficulty_idx = self._get_feature_index('week_difficulty', 5)  # Updated fallback
+        
+        # Validate indices are within bounds
+        max_idx = max(ability_idx, learning_rate_idx, performance_idx, difficulty_idx)
+        if max_idx >= n_features:
+            raise IndexError(
+                f"Feature index {max_idx} out of bounds for tensor with {n_features} features. "
+                f"Required indices: ability={ability_idx}, learning_rate={learning_rate_idx}, "
+                f"performance={performance_idx}, difficulty={difficulty_idx}"
+            )
+        
         # Extract the latest values for student ability and learning rate
         # These should be constant across the sequence for each student
-        student_ability = x[:, -1, 7]  # Last timestep, ability feature
-        student_learning_rate = x[:, -1, 8]  # Last timestep, learning rate feature
+        student_ability = x[:, -1, ability_idx]
+        student_learning_rate = x[:, -1, learning_rate_idx]
         
         # Extract historical performance and difficulty
         # We need the past h values (not including current timestep)
         if seq_len > self.history_window:
             # Take the last history_window values before the current timestep
-            past_performance = x[:, -self.history_window-1:-1, 4]  # avg_proficiency
-            past_difficulty = x[:, -self.history_window-1:-1, 6]   # week_difficulty
+            past_performance = x[:, -self.history_window-1:-1, performance_idx]
+            past_difficulty = x[:, -self.history_window-1:-1, difficulty_idx]
         else:
             # Pad with zeros if we don't have enough history
-            past_performance = x[:, :-1, 4]  # All but last timestep
-            past_difficulty = x[:, :-1, 6]
+            past_performance = x[:, :-1, performance_idx]  # All but last timestep
+            past_difficulty = x[:, :-1, difficulty_idx]
             
             # Pad to history_window size
             if past_performance.shape[1] < self.history_window:
@@ -141,17 +171,31 @@ class StudentAbilityLinearModel(nn.Module):
 
 class StudentAbilityNeuralModel(nn.Module):
     """
-    Neural network version that can capture non-linear interactions.
+    Schema-aware neural network version that can capture non-linear interactions.
     """
     
-    def __init__(self, history_window: int = 5, hidden_size: int = 32):
+    def __init__(self, history_window: int = 5, hidden_size: int = 32, schema: Optional['DataSchema'] = None):
         """
         Args:
             history_window: Number of past weeks to consider
             hidden_size: Size of hidden layers
+            schema: DataSchema defining feature layout (optional for backward compatibility)
         """
         super().__init__()
         self.history_window = history_window
+        self.schema = schema
+        
+        # Build feature indices from schema if provided
+        if schema is not None:
+            self.feature_indices = schema.get_feature_indices()
+            # Validate required features exist
+            required_features = ['student_ability', 'student_learning_rate', 'avg_proficiency', 'week_difficulty']
+            missing_features = [f for f in required_features if f not in self.feature_indices]
+            if missing_features:
+                raise ValueError(f"Schema missing required features: {missing_features}")
+        else:
+            # Fallback to hardcoded indices for backward compatibility
+            self.feature_indices = None
         
         # Input size: ability + learning_rate + history_window * (performance + difficulty)
         input_size = 2 + history_window * 2
@@ -166,31 +210,53 @@ class StudentAbilityNeuralModel(nn.Module):
             nn.Dropout(0.1),
             nn.Linear(hidden_size // 2, 1)
         )
+    
+    def _get_feature_index(self, feature_name: str, fallback_index: int) -> int:
+        """Get feature index from schema or use fallback."""
+        if self.feature_indices is not None:
+            return self.feature_indices[feature_name]
+        else:
+            return fallback_index
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
+        Schema-aware forward pass.
         
         Args:
             x: Input tensor of shape (batch_size, seq_len, n_features)
-               Same feature order as linear model
+               Features are extracted based on schema or fallback to legacy indices
                
         Returns:
             Predictions of shape (batch_size, 1)
         """
         batch_size, seq_len, n_features = x.shape
         
+        # Get feature indices (schema-based or fallback)
+        ability_idx = self._get_feature_index('student_ability', 6)  # Updated fallback
+        learning_rate_idx = self._get_feature_index('student_learning_rate', 7)  # Updated fallback
+        performance_idx = self._get_feature_index('avg_proficiency', 3)  # Updated fallback
+        difficulty_idx = self._get_feature_index('week_difficulty', 5)  # Updated fallback
+        
+        # Validate indices are within bounds
+        max_idx = max(ability_idx, learning_rate_idx, performance_idx, difficulty_idx)
+        if max_idx >= n_features:
+            raise IndexError(
+                f"Feature index {max_idx} out of bounds for tensor with {n_features} features. "
+                f"Required indices: ability={ability_idx}, learning_rate={learning_rate_idx}, "
+                f"performance={performance_idx}, difficulty={difficulty_idx}"
+            )
+        
         # Extract features
-        student_ability = x[:, -1, 7:8]  # Keep dimension
-        student_learning_rate = x[:, -1, 8:9]
+        student_ability = x[:, -1, ability_idx:ability_idx+1]  # Keep dimension
+        student_learning_rate = x[:, -1, learning_rate_idx:learning_rate_idx+1]
         
         # Extract historical performance and difficulty
         if seq_len > self.history_window:
-            past_performance = x[:, -self.history_window-1:-1, 4]
-            past_difficulty = x[:, -self.history_window-1:-1, 6]
+            past_performance = x[:, -self.history_window-1:-1, performance_idx]
+            past_difficulty = x[:, -self.history_window-1:-1, difficulty_idx]
         else:
-            past_performance = x[:, :-1, 4]
-            past_difficulty = x[:, :-1, 6]
+            past_performance = x[:, :-1, performance_idx]
+            past_difficulty = x[:, :-1, difficulty_idx]
             
             # Pad if needed
             if past_performance.shape[1] < self.history_window:

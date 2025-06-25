@@ -44,9 +44,9 @@ def demo_sklearn_models():
     print("="*60)
     
     # Create dataset - now using the richer student week data
-    data_path = '../data-analysis/student_week_aggregations_rolling.csv'
+    data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
     if not os.path.exists(data_path):
-        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv'
+        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling_new.csv'
     
     dataset = StudentTimeSeriesDataset(
         data_path=data_path,
@@ -100,9 +100,9 @@ def demo_pytorch_models():
     print(f"🖥️  Using device: {device}")
     
     # Create dataset - now using the richer student week data
-    data_path = '../data-analysis/student_week_aggregations_rolling.csv'
+    data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
     if not os.path.exists(data_path):
-        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling.csv'
+        data_path = '~/cmu/goalsetting-recommendation-algorithm/data-analysis/student_week_aggregations_rolling_new.csv'
     
     dataset = StudentTimeSeriesDataset(
         data_path=data_path,

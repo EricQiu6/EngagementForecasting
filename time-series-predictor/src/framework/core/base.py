@@ -98,13 +98,14 @@ class MetricsCalculator:
         mape = 100 * np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8)))
         r2 = 1 - np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2)
         
+        # Convert numpy types to Python floats for JSON serialization
         return {
-            'mae': mae,
-            'rmse': rmse,
-            'smape': smape,
-            'mape': mape,
-            'r2': r2,
-            'n_samples': len(y_true)
+            'mae': float(mae),
+            'rmse': float(rmse),
+            'smape': float(smape),
+            'mape': float(mape),
+            'r2': float(r2),
+            'n_samples': int(len(y_true))
         }
 
 
@@ -238,11 +239,11 @@ class CrossValidator:
         
         for metric in metric_names:
             values = [result[metric] for result in fold_results]
-            aggregated[f'{metric}_mean'] = np.mean(values)
-            aggregated[f'{metric}_std'] = np.std(values)
+            aggregated[f'{metric}_mean'] = float(np.mean(values))
+            aggregated[f'{metric}_std'] = float(np.std(values))
             
-        aggregated['n_folds'] = len(fold_results)
-        aggregated['total_samples'] = sum(result['n_samples'] for result in fold_results)
-        aggregated['fold_results'] = fold_results
+        aggregated['n_folds'] = int(len(fold_results))
+        aggregated['total_samples'] = int(sum(result['n_samples'] for result in fold_results))
+        aggregated['fold_results'] = fold_results  # fold_results now contains Python floats
         
         return aggregated 

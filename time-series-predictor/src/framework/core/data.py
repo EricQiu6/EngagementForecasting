@@ -8,7 +8,10 @@ import sys
 from pathlib import Path
 
 # Add data processing module to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
+# Go up from src/framework/core to project root, then to data
+project_root = os.path.join(os.path.dirname(__file__), '..', '..', '..')
+data_path = os.path.join(project_root, 'data')
+sys.path.append(data_path)
 
 try:
     from data_processing import create_time_series_splits, get_fold_data

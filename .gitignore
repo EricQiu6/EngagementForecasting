@@ -1,5 +1,10 @@
 # Custom
 *.tex
+*/afm_outputs*/
+*.txt
+*.html
+*.lintr*
+time-series-predictor/experiments/outputs/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

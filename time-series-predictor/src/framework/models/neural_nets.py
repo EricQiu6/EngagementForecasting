@@ -3,9 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
 
-# Import DLinear implementation
-from .DLinear import Model as DLinearModel
-from .baselines import DLinearPyTorch
+# Import baseline models
+from .baselines import DLinearWrapper
 from .student_ability_model import StudentAbilityLinearModel, StudentAbilityNeuralModel
 from .zero_inflated_model import ZeroInflatedPoissonAdapter, ImprovedStudentModel
 
@@ -279,50 +278,7 @@ class PositionalEncoding(nn.Module):
         return x
 
 
-class DLinear(nn.Module):
-    """
-    DLinear model wrapper for time series forecasting.
-    
-    Based on the paper "Are Transformers Effective for Time Series Forecasting?"
-    This is a simple yet effective linear model that decomposes time series 
-    into trend and seasonal components.
-    """
-    
-    def __init__(self,
-                 input_size: int = 2,
-                 seq_len: int = 5,
-                 pred_len: int = 1,
-                 individual: bool = False):
-        super().__init__()
-        self.input_size = input_size
-        self.seq_len = seq_len
-        self.pred_len = pred_len
-        
-        # Create a config object for the original DLinear implementation
-        class DLinearConfig:
-            def __init__(self, seq_len, pred_len, enc_in, individual):
-                self.seq_len = seq_len
-                self.pred_len = pred_len
-                self.enc_in = enc_in
-                self.individual = individual
-        
-        # We'll use the last feature (proficiency score) for forecasting
-        # In our case, enc_in=1 since we're predicting one feature
-        config = DLinearConfig(seq_len, pred_len, 1, individual)
-        self.dlinear = DLinearModel(config)
-        
-    def forward(self, x):
-        # x shape: (batch_size, seq_len, input_size)
-        # DLinear expects: (batch_size, seq_len, 1) - just the proficiency scores
-        
-        # Extract proficiency scores (second feature)
-        proficiency_scores = x[:, :, 1:2]  # (batch_size, seq_len, 1)
-        
-        # Forward through DLinear
-        output = self.dlinear(proficiency_scores)  # (batch_size, pred_len, 1)
-        
-        # Return only the last prediction
-        return output[:, -1, :]  # (batch_size, 1)
+
 
 
 # Factory function for easy model creation
@@ -354,9 +310,8 @@ def create_model(model_type: str, **kwargs):
     elif model_type == 'transformer':
         return SimpleTransformer(**kwargs)
     elif model_type == 'dlinear':
-        return DLinear(**kwargs)
-    elif model_type == 'dlinear_simple':
-        return DLinearPyTorch(**kwargs)
+        # Return the wrapper that works with SKLearnAdapter
+        return DLinearWrapper(**kwargs)
     elif model_type == 'student_ability_linear':
         return StudentAbilityLinearModel(**kwargs)
     elif model_type == 'student_ability_neural':

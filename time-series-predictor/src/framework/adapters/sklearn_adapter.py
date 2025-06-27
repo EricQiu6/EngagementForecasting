@@ -40,6 +40,9 @@ class SKLearnAdapter(TimeSeriesModel):
             self.feature_extractor = None
             self.feature_map = {}
             
+        # Pass feature metadata to models that support it
+        self._pass_feature_metadata()
+        
     def _build_feature_mapping(self):
         """Build mapping of feature names to indices based on schema."""
         self.feature_map = {}
@@ -47,21 +50,97 @@ class SKLearnAdapter(TimeSeriesModel):
         if not self.schema:
             return
             
-        # Map time column if it's in features
+        # Map all feature names to indices
+        for i, feature in enumerate(self.schema.feature_columns):
+            self.feature_map[feature] = i
+            
+        # Special mappings for time and target
         if self.schema.time_column in self.schema.feature_columns:
             self.feature_map['time'] = self.schema.feature_columns.index(self.schema.time_column)
         else:
             self.feature_map['time'] = None
             
-        # Map target column if it's in features (for lag features)
         if self.schema.target_column in self.schema.feature_columns:
             self.feature_map['target'] = self.schema.feature_columns.index(self.schema.target_column)
         else:
             self.feature_map['target'] = None
+        
+    def get_feature_names(self):
+        """Get names for all engineered features."""
+        if not self.schema:
+            return None
             
-        # Map all feature names
-        for i, feature in enumerate(self.schema.feature_columns):
-            self.feature_map[feature] = i
+        feature_names = []
+        
+        # 1. Current values (from last timestep)
+        for feat in self.schema.feature_columns:
+            feature_names.append(f'current_{feat}')
+        
+        # 2. Lag features (based on _create_all_features order)
+        lag_features = {
+            'target': self.feature_map.get('target'),
+            'minutes_per_week': self.feature_map.get('minutes_per_week'),
+            'problems_solved': self.feature_map.get('problems_solved'),
+            'total_opportunities': self.feature_map.get('total_opportunities'),
+            'n_skills_measured': self.feature_map.get('n_skills_measured')
+        }
+        
+        for feat_name, feat_idx in lag_features.items():
+            if feat_idx is not None:
+                for lag in range(self.lag_window):
+                    feature_names.append(f'{feat_name}_lag{lag+1}')
+        
+        # 3. Change features
+        change_features = ['avg_proficiency', 'minutes_per_week', 'problems_solved']
+        for feat in change_features:
+            if feat in self.feature_map:
+                feature_names.append(f'{feat}_recent_change')
+                feature_names.append(f'{feat}_avg_change')
+        
+        # 4. Statistical features
+        if 'minutes_per_week' in self.feature_map:
+            feature_names.extend([
+                'minutes_mean', 'minutes_std', 'minutes_range', 'minutes_iqr'
+            ])
+        if 'problems_solved' in self.feature_map:
+            feature_names.extend([
+                'problems_mean', 'problems_sum', 'problems_std'
+            ])
+        if 'avg_proficiency' in self.feature_map:
+            feature_names.append('proficiency_trend')
+            feature_names.append('proficiency_acceleration')
+            
+        # 5. Interaction features
+        if 'minutes_per_week' in self.feature_map and 'week_difficulty' in self.feature_map:
+            feature_names.append('minutes_x_difficulty')
+            
+        # 6. Gap features
+        if 'minutes_per_week' in self.feature_map:
+            feature_names.extend([
+                'has_recent_gap', 'weeks_since_last_gap', 'gap_count'
+            ])
+            
+        return feature_names
+    
+    def _pass_feature_metadata(self):
+        """Pass feature metadata to models that support it."""
+        if hasattr(self.sklearn_model, 'set_feature_metadata'):
+            feature_names = self.get_feature_names()
+            
+            # Build a mapping of feature types to indices
+            feature_index_map = {}
+            if feature_names:
+                for i, name in enumerate(feature_names):
+                    feature_index_map[name] = i
+                    
+            metadata = {
+                'lag_window': self.lag_window,
+                'target_name': self.schema.target_column if self.schema else None,
+                'feature_names': feature_names,
+                'feature_index_map': feature_index_map,
+            }
+            
+            self.sklearn_model.set_feature_metadata(metadata)
         
     def fit(self, 
             train_data: Union[DataLoader, Tuple[np.ndarray, np.ndarray]], 
@@ -197,16 +276,16 @@ class SKLearnAdapter(TimeSeriesModel):
         # Handle different input shapes
         if len(X_all.shape) == 3:
             # Sequence data: (batch_size, sequence_length, n_features)
-            if self.schema and self._should_create_lag_features():
-                # Schema-based lag feature creation
-                X_processed = self._create_lag_features_schema(X_all)
+            if self.schema:
+                # Use ALL features with schema-based extraction
+                X_processed = self._create_all_features(X_all)
             else:
-                # Legacy lag feature creation or simple flattening
-                X_processed = self._create_lag_features_legacy(X_all)
+                print("Create valid schema")
                     
         else:
             # Already flat features: (batch_size, n_features)
             X_processed = X_all
+            print("already flat features")
         
         # Handle targets
         if len(y_all.shape) == 2 and y_all.shape[1] == 1:
@@ -217,6 +296,178 @@ class SKLearnAdapter(TimeSeriesModel):
         
         return X_processed, y_processed
     
+    def _create_all_features(self, X_all: np.ndarray) -> np.ndarray:
+        """
+        Create features using ALL available data from the schema.
+        This includes:
+        - Current values of all features
+        - Lag values for multiple important features (not just target)
+        - Aggregated statistics over the sequence
+        - Differences/changes between timesteps
+        """
+        batch_size, seq_len, n_features = X_all.shape
+        feature_list = []
+        
+        # 1. Current values (from last timestep) for ALL features
+        current_features = X_all[:, -1, :]  # Shape: (batch_size, n_features)
+        feature_list.append(current_features)
+        
+        # 2. Lag features for MULTIPLE variables (not just target)
+        # Define which features should have lags
+        lag_features_to_create = {
+            'target': self.feature_map.get('target'),
+            'minutes_per_week': self.feature_map.get('minutes_per_week'),
+            'problems_solved': self.feature_map.get('problems_solved'),
+            'total_opportunities': self.feature_map.get('total_opportunities'),
+            'n_skills_measured': self.feature_map.get('n_skills_measured')
+        }
+        
+        # Create lags for each important feature
+        for feature_name, feature_idx in lag_features_to_create.items():
+            if feature_idx is not None:
+                values = X_all[:, :, feature_idx]  # All timesteps for this feature
+                
+                # Get last lag_window values
+                if seq_len > self.lag_window:
+                    lags = values[:, -self.lag_window:]
+                elif seq_len < self.lag_window:
+                    # Pad with zeros
+                    pad_width = ((0, 0), (self.lag_window - seq_len, 0))
+                    lags = np.pad(values, pad_width, mode='constant', constant_values=0)
+                else:
+                    lags = values
+                
+                feature_list.append(lags)
+        
+        # 3. Differences/changes (first-order differences)
+        # These capture trends and momentum
+        diff_features = []
+        
+        # Changes in key metrics
+        for feature_name, feature_idx in [
+            ('avg_proficiency', self.feature_map.get('avg_proficiency')),
+            ('minutes_per_week', self.feature_map.get('minutes_per_week')),
+            ('problems_solved', self.feature_map.get('problems_solved'))
+        ]:
+            if feature_idx is not None:
+                values = X_all[:, :, feature_idx]
+                # Recent change (last timestep - previous)
+                if seq_len > 1:
+                    recent_change = values[:, -1] - values[:, -2]
+                else:
+                    recent_change = np.zeros(batch_size)
+                diff_features.append(recent_change)
+                
+                # Average change over sequence
+                if seq_len > 1:
+                    all_changes = np.diff(values, axis=1)
+                    avg_change = np.mean(all_changes, axis=1)
+                else:
+                    avg_change = np.zeros(batch_size)
+                diff_features.append(avg_change)
+        
+        if diff_features:
+            diff_array = np.column_stack(diff_features)
+            feature_list.append(diff_array)
+        
+        # 4. Statistical features over the sequence
+        stats_features = []
+        
+        # Minutes per week - engagement pattern
+        if 'minutes_per_week' in self.feature_map:
+            idx = self.feature_map['minutes_per_week']
+            values = X_all[:, :, idx]
+            stats_features.extend([
+                np.mean(values, axis=1),  # Average engagement
+                np.std(values, axis=1),   # Variability in engagement
+                np.max(values, axis=1) - np.min(values, axis=1),  # Range
+                np.percentile(values, 75, axis=1) - np.percentile(values, 25, axis=1)  # IQR
+            ])
+        
+        # Problems solved - practice volume
+        if 'problems_solved' in self.feature_map:
+            idx = self.feature_map['problems_solved']
+            values = X_all[:, :, idx]
+            stats_features.extend([
+                np.mean(values, axis=1),  # Average practice
+                np.sum(values, axis=1),   # Total practice
+                np.std(values, axis=1),   # Practice consistency
+            ])
+        
+        # Average proficiency - performance trend
+        if 'avg_proficiency' in self.feature_map:
+            idx = self.feature_map['avg_proficiency']
+            values = X_all[:, :, idx]
+            # Calculate trend: slope of linear fit
+            x = np.arange(seq_len)
+            slopes = np.array([np.polyfit(x, values[i], 1)[0] for i in range(batch_size)])
+            stats_features.append(slopes)  # Proficiency trend
+            
+            # Also add acceleration (second derivative)
+            if seq_len > 2:
+                accel = np.array([np.polyfit(x, values[i], 2)[0] * 2 for i in range(batch_size)])
+                stats_features.append(accel)
+        
+        if stats_features:
+            stats_array = np.column_stack(stats_features)
+            feature_list.append(stats_array)
+        
+        # 5. Interaction features (optional, can be expensive)
+        # For example: engagement * difficulty at recent timesteps
+        interaction_features = []
+        
+        if 'minutes_per_week' in self.feature_map and 'week_difficulty' in self.feature_map:
+            minutes_idx = self.feature_map['minutes_per_week']
+            difficulty_idx = self.feature_map['week_difficulty']
+            # Interaction at last timestep
+            interaction = X_all[:, -1, minutes_idx] * X_all[:, -1, difficulty_idx]
+            interaction_features.append(interaction)
+        
+        if interaction_features:
+            interaction_array = np.column_stack(interaction_features)
+            feature_list.append(interaction_array)
+        
+        # 6. GAP FEATURES - Learning gaps (periods with no activity)
+        gap_features = []
+        
+        if 'minutes_per_week' in self.feature_map:
+            minutes_idx = self.feature_map['minutes_per_week']
+            minutes_values = X_all[:, :, minutes_idx]  # Shape: (batch_size, seq_len)
+            
+            # Identify gaps (weeks with 0 minutes)
+            is_gap = (minutes_values == 0).astype(float)  # 1 where gap, 0 otherwise
+            
+            # Feature 1: has_recent_gap - Was there a gap in the last 3 weeks?
+            recent_window = min(3, seq_len)
+            has_recent_gap = np.any(is_gap[:, -recent_window:], axis=1).astype(float)
+            gap_features.append(has_recent_gap)
+            
+            # Feature 2: weeks_since_last_gap - How many weeks since the last gap?
+            weeks_since_gap = np.zeros(batch_size)
+            for i in range(batch_size):
+                gap_positions = np.where(is_gap[i] == 1)[0]
+                if len(gap_positions) > 0:
+                    # Find the most recent gap
+                    last_gap_pos = gap_positions[-1]
+                    weeks_since_gap[i] = seq_len - 1 - last_gap_pos
+                else:
+                    # No gaps in sequence
+                    weeks_since_gap[i] = seq_len  # All weeks had activity
+            gap_features.append(weeks_since_gap)
+            
+            # Feature 3: gap_count - Total number of gaps in the sequence
+            gap_count = np.sum(is_gap, axis=1)
+            gap_features.append(gap_count)
+        
+        if gap_features:
+            gap_array = np.column_stack(gap_features)
+            feature_list.append(gap_array)
+        
+        # 7. Combine all features
+        X_processed = np.hstack(feature_list)
+        
+        return X_processed
+    
     def _should_create_lag_features(self) -> bool:
         """Determine if we should create lag features based on schema."""
         # Create lag features if we have both time and target columns in features
@@ -224,77 +475,12 @@ class SKLearnAdapter(TimeSeriesModel):
                 self.feature_map.get('target') is not None)
     
     def _create_lag_features_schema(self, X_all: np.ndarray) -> np.ndarray:
-        """Create lag features using schema-based indexing."""
-        batch_size, seq_len, n_features = X_all.shape
-        
-        # Get indices from schema
-        time_idx = self.feature_map.get('time')
-        target_idx = self.feature_map.get('target')
-        
-        if time_idx is None or target_idx is None:
-            # Fallback to simple flattening
-            return X_all[:, -1, :]
-        
-        # Extract components using schema indices
-        times = X_all[:, -1, time_idx]  # Latest time for each sequence
-        
-        # Extract lag values from target feature
-        lag_values = X_all[:, :, target_idx]  # All time steps for target
-        
-        # Handle lag window sizing
-        if seq_len > self.lag_window:
-            # Take last lag_window values
-            lags_processed = lag_values[:, -self.lag_window:]
-        elif seq_len < self.lag_window:
-            # Pad with zeros at the beginning
-            pad_width = ((0, 0), (self.lag_window - seq_len, 0))
-            lags_processed = np.pad(lag_values, pad_width, mode='constant', constant_values=0)
-        else:
-            lags_processed = lag_values
-        
-        # Combine features: [time, lag1, lag2, ..., lagN]
-        X_processed = np.column_stack([times, lags_processed])
-        
-        # Add other features from the last time step if needed
-        other_features = []
-        for feature_name, idx in self.feature_map.items():
-            if feature_name not in ['time', 'target'] and idx is not None:
-                other_features.append(X_all[:, -1, idx])
-        
-        if other_features:
-            X_processed = np.column_stack([X_processed] + other_features)
-        
-        return X_processed
-    
-    def _create_lag_features_legacy(self, X_all: np.ndarray) -> np.ndarray:
         """
-        Create lag features using legacy hardcoded indices.
-        Used when no schema is available for backward compatibility.
+        DEPRECATED: This method only used time and target.
+        Use _create_all_features instead for comprehensive feature extraction.
         """
-        batch_size, seq_len, n_features = X_all.shape
-        
-        # Legacy behavior: assume first feature is time, second is target
-        # Extract week numbers (latest in each sequence)
-        weeks = X_all[:, -1, 0]  # Shape: (batch_size,)
-        
-        # Extract lag features (proficiency scores from all time steps)
-        lags_all = X_all[:, :, 1]  # Shape: (batch_size, seq_len)
-        
-        # Handle lag window sizing vectorized
-        if seq_len > self.lag_window:
-            # Take last lag_window values
-            lags_processed = lags_all[:, -self.lag_window:]
-        elif seq_len < self.lag_window:
-            # Pad with zeros at the beginning
-            pad_width = ((0, 0), (self.lag_window - seq_len, 0))
-            lags_processed = np.pad(lags_all, pad_width, mode='constant', constant_values=0)
-        else:
-            lags_processed = lags_all
-        
-        # Combine features: [week, lag1, lag2, ..., lagN] for each sample
-        X_processed = np.column_stack([weeks, lags_processed])
-        
-        return X_processed
+        # Redirect to the new comprehensive method
+        return self._create_all_features(X_all)
 
 
 # Alias for backward compatibility

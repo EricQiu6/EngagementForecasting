@@ -67,6 +67,7 @@ class DataSchema:
     # Additional configuration
     time_format: Optional[str] = None  # e.g., '%Y-W%W' for week strings
     min_sequence_length: int = 2
+    validation_rules: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     
     def __post_init__(self):
         """Initialize column schemas if not provided."""
@@ -115,7 +116,8 @@ class DataSchema:
             feature_columns=config['feature_columns'],
             columns=columns,
             time_format=config.get('time_format'),
-            min_sequence_length=config.get('min_sequence_length', 2)
+            min_sequence_length=config.get('min_sequence_length', 2),
+            validation_rules=config.get('validation_rules', {})
         )
     
     def to_config(self) -> Dict:
@@ -136,7 +138,8 @@ class DataSchema:
             'feature_columns': self.feature_columns,
             'columns': columns_config,
             'time_format': self.time_format,
-            'min_sequence_length': self.min_sequence_length
+            'min_sequence_length': self.min_sequence_length,
+            'validation_rules': self.validation_rules
         }
     
     def get_all_columns(self) -> List[str]:
@@ -298,6 +301,23 @@ def week_string_to_numeric(week_str: Any, format: Optional[str] = None) -> float
         return 0.0
 
 
+def get_schema(name: str) -> DataSchema:
+    """
+    Get a predefined schema by name.
+    
+    Available schemas:
+    - legacy: Original framework columns (name/week/proficient)
+    - student_week: Student weekly aggregation columns
+    - extended: Student weekly with ability features
+    - time_goal: Predict weekly time spent (basic features)
+    - time_goal_extended: Predict weekly time spent (with ability features)
+    """
+    if name not in SCHEMAS:
+        raise ValueError(f"Unknown schema: {name}. Available: {list(SCHEMAS.keys())}")
+    
+    return SCHEMAS[name]
+
+
 # Predefined schemas for common use cases
 SCHEMAS = {
     'legacy': DataSchema(
@@ -305,10 +325,9 @@ SCHEMAS = {
         time_column='week',
         target_column='proficient',
         feature_columns=['week', 'proficient'],
-        columns={
-            'name': ColumnSchema('name', 'str', required=True),
-            'week': ColumnSchema('week', 'float', required=True),  # Week can be int or float
-            'proficient': ColumnSchema('proficient', 'float', required=True, default_value=0.0)
+        time_format='numeric',
+        validation_rules={
+            'proficient': {'min': 0.0, 'max': 1.0}
         }
     ),
     
@@ -317,13 +336,14 @@ SCHEMAS = {
         time_column='week_id',
         target_column='avg_proficiency',
         feature_columns=[
-            'week_id',  # Include time as a feature!
-            'minutes_per_week',
-            'problems_solved',
-            'total_opportunities',
-            'avg_proficiency'
+            'week_id', 'minutes_per_week', 'problems_solved',
+            'total_opportunities', 'avg_proficiency', 'n_skills_measured'
         ],
-        time_format='%Y-W%W'
+        time_format='week_string',
+        validation_rules={
+            'avg_proficiency': {'min': 0.0, 'max': 1.0},
+            'minutes_per_week': {'min': 0.0}
+        }
     ),
     
     'extended': DataSchema(
@@ -331,40 +351,50 @@ SCHEMAS = {
         time_column='week_id',
         target_column='avg_proficiency',
         feature_columns=[
-            'week_id',  # TEMPORAL INFORMATION IS CRITICAL!
-            'minutes_per_week',
-            'problems_solved',
-            'total_opportunities',
-            'avg_proficiency',
-            'n_skills_measured',
-            'week_difficulty',
-            'student_ability',
-            'student_learning_rate'
+            'week_id', 'minutes_per_week', 'problems_solved',
+            'total_opportunities', 'avg_proficiency', 'n_skills_measured',
+            'week_difficulty', 'student_ability', 'student_learning_rate'
         ],
-        time_format='%Y-W%W'
+        time_format='week_string',
+        validation_rules={
+            'avg_proficiency': {'min': 0.0, 'max': 1.0},
+            'minutes_per_week': {'min': 0.0},
+            'student_ability': {'min': 0.0, 'max': 1.0},
+            'week_difficulty': {'min': 0.0, 'max': 1.0}
+        }
     ),
     
-    'extended_no_time': DataSchema(
+    # New schemas for predicting time spent
+    'time_goal': DataSchema(
         student_column='anon_student_id',
         time_column='week_id',
-        target_column='avg_proficiency',
+        target_column='minutes_per_week',  # Predicting engagement!
         feature_columns=[
-            'minutes_per_week',
-            'problems_solved',
-            'total_opportunities',
-            'avg_proficiency',
-            'n_skills_measured',
-            'week_difficulty',
-            'student_ability',
-            'student_learning_rate'
+            'week_id', 'avg_proficiency', 'problems_solved',
+            'total_opportunities', 'n_skills_measured', 'minutes_per_week'
         ],
-        time_format='%Y-W%W'
+        time_format='week_string',
+        validation_rules={
+            'minutes_per_week': {'min': 0.0},
+            'avg_proficiency': {'min': 0.0, 'max': 1.0}
+        }
+    ),
+    
+    'time_goal_extended': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='minutes_per_week',  # Predicting engagement!
+        feature_columns=[
+            'week_id', 'avg_proficiency', 'problems_solved',
+            'total_opportunities', 'n_skills_measured', 'week_difficulty',
+            'student_ability', 'student_learning_rate', 'minutes_per_week'
+        ],
+        time_format='week_string',
+        validation_rules={
+            'minutes_per_week': {'min': 0.0},
+            'avg_proficiency': {'min': 0.0, 'max': 1.0},
+            'student_ability': {'min': 0.0, 'max': 1.0},
+            'week_difficulty': {'min': 0.0, 'max': 1.0}
+        }
     )
-}
-
-
-def get_schema(name: str) -> DataSchema:
-    """Get a predefined schema by name."""
-    if name not in SCHEMAS:
-        raise ValueError(f"Unknown schema '{name}'. Available: {list(SCHEMAS.keys())}")
-    return SCHEMAS[name] 
+} 

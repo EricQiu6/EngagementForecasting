@@ -159,11 +159,11 @@ class CrossValidator:
         # Always use DataLoader - let the adapter handle conversion if needed
         # This ensures consistent behavior and lets adapters use their own logic
         return DataLoaderFactory.create_dataloader(
-            self.dataset, 
-            indices=indices, 
+                self.dataset, 
+                indices=indices, 
             batch_size=32, 
-            shuffle=False
-        )
+                shuffle=False
+            )
     
     def _extract_targets(self, data):
         """Extract target values from data (DataLoader or numpy arrays)."""

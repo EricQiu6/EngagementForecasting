@@ -1,0 +1,370 @@
+"""
+Schema-driven data handling for time series framework.
+Eliminates hardcoded column names and provides configurable data validation.
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Optional, Any, Union, Tuple
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+
+
+@dataclass
+class ColumnSchema:
+    """Schema definition for a single column."""
+    name: str
+    dtype: str  # 'float', 'int', 'str', 'datetime'
+    required: bool = True
+    default_value: Any = None
+    description: str = ""
+    
+    def validate(self, value: Any) -> Tuple[bool, Optional[str]]:
+        """Validate a single value against this column schema."""
+        if pd.isna(value):
+            if self.required and self.default_value is None:
+                return False, f"Required column '{self.name}' has missing values"
+            return True, None
+            
+        # Type validation
+        if self.dtype == 'float':
+            try:
+                float(value)
+                return True, None
+            except (ValueError, TypeError):
+                return False, f"Column '{self.name}' expects float but got {type(value)}"
+        elif self.dtype == 'int':
+            try:
+                int(value)
+                return True, None
+            except (ValueError, TypeError):
+                return False, f"Column '{self.name}' expects int but got {type(value)}"
+        elif self.dtype == 'str':
+            if not isinstance(value, str):
+                return False, f"Column '{self.name}' expects str but got {type(value)}"
+            return True, None
+        elif self.dtype == 'datetime':
+            if not isinstance(value, (pd.Timestamp, str)):
+                return False, f"Column '{self.name}' expects datetime but got {type(value)}"
+            return True, None
+        else:
+            return False, f"Unknown dtype '{self.dtype}' for column '{self.name}'"
+
+
+@dataclass
+class DataSchema:
+    """Complete schema definition for time series data."""
+    # Core column definitions
+    student_column: str
+    time_column: str
+    target_column: str
+    feature_columns: List[str]
+    
+    # Column schemas
+    columns: Dict[str, ColumnSchema] = field(default_factory=dict)
+    
+    # Additional configuration
+    time_format: Optional[str] = None  # e.g., '%Y-W%W' for week strings
+    min_sequence_length: int = 2
+    
+    def __post_init__(self):
+        """Initialize column schemas if not provided."""
+        if not self.columns:
+            # Auto-generate basic schemas
+            all_columns = (
+                [self.student_column, self.time_column, self.target_column] + 
+                self.feature_columns
+            )
+            for col in all_columns:
+                if col not in self.columns:
+                    # Infer dtype based on column name patterns
+                    if 'id' in col.lower() or col == 'name':
+                        dtype = 'str'
+                    elif 'week' in col.lower() or 'date' in col.lower():
+                        dtype = 'float'  # Week numbers are numeric
+                    else:
+                        dtype = 'float'  # Default for numeric features
+                    
+                    self.columns[col] = ColumnSchema(
+                        name=col,
+                        dtype=dtype,
+                        required=True
+                    )
+    
+    @classmethod
+    def from_config(cls, config: Union[Dict, str, Path]) -> 'DataSchema':
+        """Create schema from configuration dict or file."""
+        if isinstance(config, (str, Path)):
+            with open(config, 'r') as f:
+                config = json.load(f)
+        
+        # Extract column schemas if provided
+        columns = {}
+        if 'columns' in config:
+            for col_name, col_config in config['columns'].items():
+                columns[col_name] = ColumnSchema(
+                    name=col_name,
+                    **col_config
+                )
+        
+        return cls(
+            student_column=config['student_column'],
+            time_column=config['time_column'],
+            target_column=config['target_column'],
+            feature_columns=config['feature_columns'],
+            columns=columns,
+            time_format=config.get('time_format'),
+            min_sequence_length=config.get('min_sequence_length', 2)
+        )
+    
+    def to_config(self) -> Dict:
+        """Export schema to configuration dict."""
+        columns_config = {}
+        for col_name, col_schema in self.columns.items():
+            columns_config[col_name] = {
+                'dtype': col_schema.dtype,
+                'required': col_schema.required,
+                'default_value': col_schema.default_value,
+                'description': col_schema.description
+            }
+        
+        return {
+            'student_column': self.student_column,
+            'time_column': self.time_column,
+            'target_column': self.target_column,
+            'feature_columns': self.feature_columns,
+            'columns': columns_config,
+            'time_format': self.time_format,
+            'min_sequence_length': self.min_sequence_length
+        }
+    
+    def get_all_columns(self) -> List[str]:
+        """Get all column names used in the schema."""
+        return list(set(
+            [self.student_column, self.time_column, self.target_column] + 
+            self.feature_columns
+        ))
+    
+    def get_feature_indices(self) -> Dict[str, int]:
+        """Get feature name to index mapping for array operations."""
+        indices = {}
+        for i, col in enumerate(self.feature_columns):
+            indices[col] = i
+        return indices
+
+
+class DataValidator:
+    """Validates datasets against a schema."""
+    
+    def __init__(self, schema: DataSchema):
+        self.schema = schema
+    
+    def validate_dataset(self, df: pd.DataFrame) -> Tuple[bool, List[str]]:
+        """
+        Validate a dataframe against the schema.
+        
+        Returns:
+            (is_valid, list_of_issues)
+        """
+        issues = []
+        
+        # Check required columns exist
+        required_columns = self.schema.get_all_columns()
+        missing_columns = set(required_columns) - set(df.columns)
+        if missing_columns:
+            issues.append(f"Missing required columns: {missing_columns}")
+        
+        # Validate column types and values
+        for col_name, col_schema in self.schema.columns.items():
+            if col_name in df.columns:
+                # Sample validation (check first 100 non-null values)
+                sample = df[col_name].dropna().head(100)
+                for value in sample:
+                    is_valid, error = col_schema.validate(value)
+                    if not is_valid:
+                        issues.append(error)
+                        break  # One error per column is enough
+        
+        # Check temporal consistency
+        if self.schema.time_column in df.columns and self.schema.student_column in df.columns:
+            temporal_issues = self._check_temporal_consistency(df)
+            issues.extend(temporal_issues)
+        
+        # Check minimum sequence lengths
+        if self.schema.student_column in df.columns:
+            seq_length_issues = self._check_sequence_lengths(df)
+            issues.extend(seq_length_issues)
+        
+        return len(issues) == 0, issues
+    
+    def _check_temporal_consistency(self, df: pd.DataFrame) -> List[str]:
+        """Check for temporal consistency issues."""
+        issues = []
+        
+        # Check for duplicate time entries per student
+        duplicates = df.groupby([self.schema.student_column, self.schema.time_column]).size()
+        duplicate_entries = duplicates[duplicates > 1]
+        if len(duplicate_entries) > 0:
+            issues.append(
+                f"Found {len(duplicate_entries)} duplicate time entries for students"
+            )
+        
+        return issues
+    
+    def _check_sequence_lengths(self, df: pd.DataFrame) -> List[str]:
+        """Check that students have minimum required sequence length."""
+        issues = []
+        
+        student_counts = df.groupby(self.schema.student_column).size()
+        short_sequences = student_counts[student_counts < self.schema.min_sequence_length]
+        
+        if len(short_sequences) > 0:
+            issues.append(
+                f"Found {len(short_sequences)} students with less than "
+                f"{self.schema.min_sequence_length} time points"
+            )
+        
+        return issues
+
+
+class FeatureExtractor:
+    """Extracts features based on schema configuration."""
+    
+    def __init__(self, schema: DataSchema):
+        self.schema = schema
+        self.feature_indices = schema.get_feature_indices()
+    
+    def extract_features(self, row: pd.Series) -> List[float]:
+        """Extract features from a data row based on schema."""
+        features = []
+        
+        for col in self.schema.feature_columns:
+            if col in row:
+                value = self._safe_float_conversion(row[col])
+            else:
+                # Use default value from schema
+                col_schema = self.schema.columns.get(col)
+                if col_schema and col_schema.default_value is not None:
+                    value = float(col_schema.default_value)
+                else:
+                    value = 0.0
+            
+            features.append(value)
+        
+        return features
+    
+    def extract_from_array(self, X: np.ndarray, feature_name: str) -> np.ndarray:
+        """Extract specific feature from array using schema-based indexing."""
+        if feature_name not in self.feature_indices:
+            raise ValueError(f"Feature '{feature_name}' not in schema")
+        
+        idx = self.feature_indices[feature_name]
+        return X[..., idx]
+    
+    def _safe_float_conversion(self, value: Any) -> float:
+        """Safely convert value to float with consistent handling."""
+        if pd.isna(value) or value == 'NA' or value == '':
+            return 0.0
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+
+
+def week_string_to_numeric(week_str: Any, format: Optional[str] = None) -> float:
+    """
+    Convert week string to numeric with consistent float return type.
+    
+    Args:
+        week_str: Week string or numeric value
+        format: Optional format string for parsing
+        
+    Returns:
+        float: Always returns float for consistency
+    """
+    if pd.isna(week_str) or week_str == 'NA' or week_str == '':
+        return 0.0
+    
+    try:
+        # Handle week string format (e.g., '2011-W36')
+        if isinstance(week_str, str) and '-W' in week_str:
+            year, week = week_str.split('-W')
+            return float(int(year) * 100 + int(week))
+        else:
+            # Direct numeric conversion
+            return float(week_str)
+    except (ValueError, AttributeError, TypeError):
+        return 0.0
+
+
+# Predefined schemas for common use cases
+SCHEMAS = {
+    'legacy': DataSchema(
+        student_column='name',
+        time_column='week',
+        target_column='proficient',
+        feature_columns=['week', 'proficient'],
+        columns={
+            'name': ColumnSchema('name', 'str', required=True),
+            'week': ColumnSchema('week', 'float', required=True),  # Week can be int or float
+            'proficient': ColumnSchema('proficient', 'float', required=True, default_value=0.0)
+        }
+    ),
+    
+    'student_week': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='avg_proficiency',
+        feature_columns=[
+            'week_id',  # Include time as a feature!
+            'minutes_per_week',
+            'problems_solved',
+            'total_opportunities',
+            'avg_proficiency'
+        ],
+        time_format='%Y-W%W'
+    ),
+    
+    'extended': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='avg_proficiency',
+        feature_columns=[
+            'week_id',  # TEMPORAL INFORMATION IS CRITICAL!
+            'minutes_per_week',
+            'problems_solved',
+            'total_opportunities',
+            'avg_proficiency',
+            'n_skills_measured',
+            'week_difficulty',
+            'student_ability',
+            'student_learning_rate'
+        ],
+        time_format='%Y-W%W'
+    ),
+    
+    'extended_no_time': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='avg_proficiency',
+        feature_columns=[
+            'minutes_per_week',
+            'problems_solved',
+            'total_opportunities',
+            'avg_proficiency',
+            'n_skills_measured',
+            'week_difficulty',
+            'student_ability',
+            'student_learning_rate'
+        ],
+        time_format='%Y-W%W'
+    )
+}
+
+
+def get_schema(name: str) -> DataSchema:
+    """Get a predefined schema by name."""
+    if name not in SCHEMAS:
+        raise ValueError(f"Unknown schema '{name}'. Available: {list(SCHEMAS.keys())}")
+    return SCHEMAS[name] 

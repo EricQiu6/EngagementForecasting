@@ -1,0 +1,677 @@
+---
+title: "Rolling Window AFM and Weekly Data"
+author: "Data Analysis Report"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Data Loading and Setup
+
+```{r}
+DATA_PATH    <- "All_Data_1884_2013_0215_193821.csv"
+AFM_DIR      <- "afm_outputs_rolling_new"
+OUTPUT_FILE  <- "student_week_aggregations_rolling_new.csv"
+
+# Create output directory if it doesn't exist
+if (!dir.exists(AFM_DIR)) {
+  dir.create(AFM_DIR, recursive = TRUE)
+}
+```
+
+# Key variables
+
+```{r}
+# Rolling window size (in weeks)
+ROLLING_WINDOW_SIZE <- as.numeric(Sys.getenv("ROLLING_WINDOW_SIZE", "4"))  # Use last 4 weeks of data for each model
+
+# Control how duration is calculated
+USE_PROVIDED_DURATION <- TRUE  
+
+# Control how proficiency is calculated
+PROFICIENCY_METHOD <- Sys.getenv("PROFICIENCY_METHOD", "new_skills_mastered")
+
+# Sample a percentage of students (set to 100 to use all students)
+STUDENT_SAMPLE_PERCENT <- as.numeric(Sys.getenv("STUDENT_SAMPLE_PERCENT", "30"))
+STUDENT_SAMPLE_SEED <- 42      
+
+# Outlier removal for durations
+REMOVE_DURATION_OUTLIERS <- as.logical(Sys.getenv("REMOVE_DURATION_OUTLIERS", "TRUE"))
+TUKEY_K <- as.numeric(Sys.getenv("TUKEY_K", "1.5"))
+
+# Parallel processing
+N_CORES <- as.numeric(Sys.getenv("N_CORES", parallel::detectCores() - 1))  # Leave one core free by default
+
+# Debug mode - run sequentially
+DEBUG_MODE <- as.logical(Sys.getenv("DEBUG_MODE", "FALSE"))
+```
+
+# Libraries
+
+```{r}
+suppressPackageStartupMessages({
+  library(readr)      
+  library(dplyr)      
+  library(tidyr)      
+  library(janitor)    
+  library(lme4)       
+  library(fs)         
+  library(stringr)    
+  library(tibble)     
+  library(lubridate)  
+  library(foreach)    # For parallel processing
+  library(doParallel) # Parallel backend
+  library(progress)   # Progress bars
+})
+
+source("data_cleaning_helpers.R")
+```
+
+# 1. Load and preprocess data
+
+```{r}
+cat("Loading and preprocessing data...\n")
+
+raw <- read_delim(DATA_PATH, delim = "\t", show_col_types = FALSE) |>
+         clean_names()
+
+# Parse dates and create week identifiers
+d_with_week_id <- raw %>%
+  mutate(
+    step_start_datetime = ymd_hms(step_start_time),
+    duration_sec = if (USE_PROVIDED_DURATION) {
+      as.numeric(step_duration_sec)
+    } else {
+      step_end_datetime <- ymd_hms(step_end_time)
+      as.numeric(difftime(step_end_datetime, step_start_datetime, units = "secs"))
+    },
+    week_year = isoyear(step_start_datetime),
+    week_num = isoweek(step_start_datetime),
+    week_id = paste0(week_year, "-W", sprintf("%02d", week_num))
+  ) %>%
+  filter(!is.na(step_start_datetime))
+
+# Apply duration outlier removal
+if (REMOVE_DURATION_OUTLIERS) {
+  valid_durations <- d_with_week_id %>%
+    filter(!is.na(duration_sec) & duration_sec > 0) %>%
+    pull(duration_sec)
+  
+  box_stats <- boxplot.stats(valid_durations, coef = TUKEY_K)
+  lower_fence <- 0  # Durations can't be negative
+  upper_fence <- box_stats$stats[5]
+  
+  d_with_week_id <- d_with_week_id %>%
+    filter(is.na(duration_sec) | (duration_sec >= lower_fence & duration_sec <= upper_fence))
+  
+  cat("Duration outliers removed. Upper fence:", round(upper_fence, 1), "seconds\n")
+}
+
+# Apply student sampling
+if (STUDENT_SAMPLE_PERCENT < 100) {
+  all_students <- unique(d_with_week_id$anon_student_id)
+  n_keep <- ceiling(length(all_students) * STUDENT_SAMPLE_PERCENT / 100)
+  
+  set.seed(STUDENT_SAMPLE_SEED)
+  sampled_students <- sort(all_students) %>%
+    sample(size = n_keep, replace = FALSE)
+  
+  d_with_week_id <- d_with_week_id %>%
+    filter(anon_student_id %in% sampled_students)
+  
+  cat("Sampled", STUDENT_SAMPLE_PERCENT, "% of students:", n_keep, "students retained\n")
+}
+
+# Process skills
+d_with_skills <- d_with_week_id %>%
+  separate_longer_delim(c(kc_sub_skills, opportunity_sub_skills), delim = "~~") %>%
+  clean_skills_systematic("kc_sub_skills", min_length = 10, verbose = FALSE)
+
+# Build AFM-ready data
+d_afm <- d_with_skills %>%
+  transmute(
+    anon_student_id = anon_student_id,
+    week_id = week_id,
+    kc_sub_skills = kc_sub_skills,
+    n_opportunity = as.integer(opportunity_sub_skills),
+    outcome_bin = case_when(
+      first_attempt == "correct" ~ 1L,
+      first_attempt == "incorrect" ~ 0L,
+      first_attempt == "hint" ~ 0L
+    )
+  ) %>%
+  filter(!is.na(kc_sub_skills) & kc_sub_skills != "" & !is.na(outcome_bin))
+
+# Get all unique weeks sorted chronologically
+all_weeks <- unique(d_afm$week_id) %>% sort()
+n_weeks <- length(all_weeks)
+
+cat("\nData preprocessing complete.\n")
+cat("Total weeks:", n_weeks, "\n")
+cat("Date range:", min(all_weeks), "to", max(all_weeks), "\n")
+cat("Total observations:", nrow(d_afm), "\n\n")
+```
+
+# 2. Set up parallel processing
+
+```{r}
+if (!DEBUG_MODE) {
+  # Register parallel backend
+  cl <- makeCluster(N_CORES)
+  registerDoParallel(cl)
+  cat("Parallel processing set up with", N_CORES, "cores\n\n")
+} else {
+  cat("DEBUG MODE: Running sequentially\n\n")
+}
+```
+
+# 3. Fit rolling window AFM models
+
+```{r}
+cat("Fitting rolling window AFM models...\n")
+cat("Window size:", ROLLING_WINDOW_SIZE, "weeks\n")
+cat("Total weeks to process:", n_weeks, "\n")
+cat("Using", N_CORES, "cores\n\n")
+
+# Check data before processing
+if (nrow(d_afm) == 0) {
+  stop("No data available after preprocessing!")
+}
+
+# Progress tracking
+if (DEBUG_MODE) {
+  cat("Processing", n_weeks, "weeks sequentially (DEBUG MODE)...\n")
+} else {
+  cat("Processing", n_weeks, "weeks in parallel...\n")
+}
+
+# Choose parallel or sequential execution
+`%do_operator%` <- if(DEBUG_MODE) `%do%` else `%dopar%`
+
+# Process each week
+# Note: .combine='list' with foreach can be problematic in parallel mode
+# We'll use a custom combine function that preserves all results
+combine_results <- function(...) {
+  # Combine all arguments into a single list
+  results <- list(...)
+  # Flatten if needed while preserving structure
+  return(results)
+}
+
+rolling_results <- foreach(
+  i = 1:n_weeks,
+  .packages = c("dplyr", "lme4", "tibble"),
+  .combine = combine_results,
+  .errorhandling = "pass",
+  .multicombine = TRUE,
+  .maxcombine = n_weeks
+) %do_operator% {
+  
+  current_week <- all_weeks[i]
+  
+  # Debug output
+  if (DEBUG_MODE && (i %% 10 == 1 || i <= 5)) {
+    cat("  Processing week", i, "of", n_weeks, ":", current_week, "\n")
+  }
+  
+  # Determine training data window
+  if (i < ROLLING_WINDOW_SIZE) {
+    # Use all available data up to current week
+    window_start_idx <- 1
+  } else {
+    # Use rolling window
+    window_start_idx <- i - ROLLING_WINDOW_SIZE + 1
+  }
+  
+  window_weeks <- all_weeks[window_start_idx:i]
+  
+  # Filter data for this window
+  window_data <- d_afm %>%
+    filter(week_id %in% window_weeks)
+  
+  # Skip if insufficient data
+  if (nrow(window_data) < 100 || 
+      n_distinct(window_data$anon_student_id) < 5 ||
+      n_distinct(window_data$kc_sub_skills) < 3) {
+    return(NULL)
+  }
+  
+  # Fit AFM model for this week
+  tryCatch({
+    m_afm <- glmer(
+      outcome_bin ~ n_opportunity + (1 + n_opportunity | anon_student_id) + (1 | kc_sub_skills),
+      data = window_data,
+      family = binomial,
+      nAGQ = 0,
+      verbose = 0,
+      control = glmerControl(
+        optimizer = "bobyqa",
+        calc.derivs = FALSE,
+        check.conv.grad = .makeCC("warning", tol = 1e-3, relTol = NULL),
+        check.conv.singular = .makeCC(action = "ignore", tol = 1e-3),
+        check.conv.hess = .makeCC(action = "ignore", tol = 1e-3),
+        optCtrl = list(maxfun = 50000)  # Reduced for speed
+      )
+    )
+    
+    # Save model
+    model_file <- file.path(AFM_DIR, paste0("afm_model_", current_week, ".rds"))
+    saveRDS(m_afm, file = model_file)
+    
+    # Extract parameters
+    student_effects <- ranef(m_afm)$anon_student_id
+    fixed_effects <- fixef(m_afm)
+    global_intercept <- fixed_effects["(Intercept)"]
+    global_learning_rate <- fixed_effects["n_opportunity"]
+    
+    student_abilities <- tibble(
+      anon_student_id = rownames(student_effects),
+      ability_deviation = student_effects[,1],                    # Random effect (deviation)
+      learning_rate_deviation = student_effects[,2],              # Random effect (deviation)
+      ability = global_intercept + student_effects[,1],           # Total ability  
+      learning_rate = global_learning_rate + student_effects[,2], # Total learning rate
+      week_id = current_week
+    )
+    
+    skill_effects <- ranef(m_afm)$kc_sub_skills
+    skill_easiness <- tibble(
+      kc_sub_skills = rownames(skill_effects),
+      easiness = skill_effects[,1],
+      week_id = current_week
+    )
+    
+    # Store global parameters for this week's model
+    global_params <- tibble(
+      week_id = current_week,
+      global_intercept = global_intercept,
+      global_learning_rate = global_learning_rate
+    )
+    
+    # Calculate proficiency for students in current week only
+    current_week_data <- d_afm %>%
+      filter(week_id == current_week)
+    
+    # Last opportunities for current week
+    last_opps <- current_week_data %>%
+      group_by(anon_student_id, kc_sub_skills) %>%
+      summarise(last_opportunity = max(n_opportunity, na.rm = TRUE), .groups = "drop")
+    
+    # Predict proficiency
+    if (nrow(last_opps) > 0) {
+      pred_data <- last_opps %>%
+        rename(n_opportunity = last_opportunity)
+      
+      proficiency_estimates <- pred_data %>%
+        mutate(
+          proficiency = predict(m_afm, newdata = ., type = "response", allow.new.levels = TRUE),
+          week_id = current_week
+        )
+    } else {
+      proficiency_estimates <- tibble()
+    }
+    
+    # Calculate week difficulty using model's skill easiness
+    if (nrow(current_week_data) > 0 && nrow(skill_easiness) > 0) {
+      skill_encounters <- current_week_data %>%
+        group_by(anon_student_id, kc_sub_skills) %>%
+        summarise(encounters_this_week = n(), .groups = "drop")
+      
+      week_difficulty <- skill_encounters %>%
+        left_join(skill_easiness, by = "kc_sub_skills") %>%
+        filter(!is.na(easiness)) %>%
+        group_by(anon_student_id) %>%
+        summarise(
+          week_easiness = sum(easiness * encounters_this_week) / sum(encounters_this_week),
+          week_difficulty = -week_easiness,
+          week_id = current_week,
+          .groups = "drop"
+        ) %>%
+        mutate(
+          # Replace NaN with NA (occurs when no valid skills)
+          week_difficulty = if_else(is.nan(week_difficulty), NA_real_, week_difficulty),
+          week_easiness = if_else(is.nan(week_easiness), NA_real_, week_easiness)
+        ) %>%
+        select(anon_student_id, week_id, week_difficulty)  # Only keep needed columns
+    } else {
+      week_difficulty <- tibble(
+        anon_student_id = character(),
+        week_id = character(),
+        week_difficulty = numeric()
+      )
+    }
+    
+    # Return results 
+    # Important: Return the result, not wrapped in another list
+    result <- list(
+      week_id = current_week,
+      window_start = min(window_weeks),
+      window_size = length(window_weeks),
+      n_students = n_distinct(window_data$anon_student_id),
+      n_skills = n_distinct(window_data$kc_sub_skills),
+      n_observations = nrow(window_data),
+      student_abilities = student_abilities,
+      skill_easiness = skill_easiness,
+      global_params = global_params,
+      proficiency_estimates = proficiency_estimates,
+      week_difficulty = week_difficulty,
+      model_converged = is.null(m_afm@optinfo$conv$lme4$messages)
+    )
+    return(result)
+    
+  }, error = function(e) {
+    return(list(
+      week_id = current_week,
+      error = as.character(e$message)
+    ))
+  })
+}
+
+cat("\nModel fitting complete.\n")
+
+# Debug the structure of results
+cat("\nDebugging rolling_results structure:\n")
+cat("  Type:", class(rolling_results), "\n")
+cat("  Length:", length(rolling_results), "\n")
+if (length(rolling_results) > 0) {
+  cat("  First element type:", class(rolling_results[[1]]), "\n")
+  if (!is.null(rolling_results[[1]]) && is.list(rolling_results[[1]])) {
+    cat("  First element names:", paste(names(rolling_results[[1]]), collapse=", "), "\n")
+  }
+}
+
+# Stop parallel cluster (if used)
+if (!DEBUG_MODE) {
+  stopCluster(cl)
+}
+```
+
+# 4. Process results and calculate final metrics
+
+```{r}
+cat("\nProcessing results...\n")
+
+# Check if we got any results
+if (is.null(rolling_results) || length(rolling_results) == 0) {
+  stop("No results returned from parallel processing!")
+}
+
+# Extract successful results (filter out NULLs and errors)
+# First, ensure rolling_results is a proper list
+if (!is.list(rolling_results)) {
+  cat("WARNING: rolling_results is not a list! Type:", class(rolling_results), "\n")
+  rolling_results <- list(rolling_results)
+}
+
+# Debug what we got
+cat("Filtering results:\n")
+cat("  Total elements in rolling_results:", length(rolling_results), "\n")
+
+# Check each element
+result_types <- sapply(rolling_results, function(x) {
+  if (is.null(x)) return("NULL")
+  if (!is.list(x)) return(paste("Non-list:", class(x)))
+  if (!is.null(x$error)) return("Error")
+  if (!is.null(x$week_id)) return("Success")
+  return("Unknown")
+})
+cat("  Result types:", table(result_types), "\n")
+
+# Extract successful weeks more carefully
+successful_weeks <- Filter(function(x) {
+  !is.null(x) && is.list(x) && is.null(x$error) && !is.null(x$week_id)
+}, rolling_results)
+
+if (length(successful_weeks) == 0) {
+  # Check for errors
+  errors <- rolling_results[sapply(rolling_results, function(x) !is.null(x$error))]
+  if (length(errors) > 0) {
+    cat("Errors encountered:\n")
+    for (e in errors) {
+      cat("  Week", e$week_id, ":", e$error, "\n")
+    }
+  }
+  stop("No models were successfully fitted!")
+}
+
+cat("Successfully processed", length(successful_weeks), "weeks\n")
+
+# Combine proficiency estimates
+all_proficiency <- bind_rows(lapply(successful_weeks, function(x) x$proficiency_estimates))
+
+# Combine week difficulty
+all_difficulty_list <- lapply(successful_weeks, function(x) x$week_difficulty)
+all_difficulty_non_null <- all_difficulty_list[!sapply(all_difficulty_list, is.null)]
+cat("\nDifficulty list debugging:\n")
+cat("  Total weeks processed:", length(successful_weeks), "\n")
+cat("  Non-null difficulty results:", length(all_difficulty_non_null), "\n")
+
+if (length(all_difficulty_non_null) > 0) {
+  all_difficulty <- bind_rows(all_difficulty_non_null)
+} else {
+  # Create empty tibble with correct structure
+  all_difficulty <- tibble(
+    anon_student_id = character(),
+    week_id = character(), 
+    week_difficulty = numeric()
+  )
+}
+
+# Debug week difficulty
+cat("\nWeek difficulty debugging:\n")
+cat("  Number of rows in all_difficulty:", nrow(all_difficulty), "\n")
+if (nrow(all_difficulty) > 0) {
+  cat("  Unique students in all_difficulty:", n_distinct(all_difficulty$anon_student_id), "\n")
+  cat("  Unique weeks in all_difficulty:", n_distinct(all_difficulty$week_id), "\n")
+  cat("  Sample of all_difficulty:\n")
+  print(head(all_difficulty, 3))
+} else {
+  cat("  WARNING: No week difficulty data was calculated!\n")
+}
+
+# Calculate proficiency metric
+if (PROFICIENCY_METHOD == "mean") {
+  avg_proficiency <- all_proficiency %>%
+    group_by(anon_student_id, week_id) %>%
+    summarise(
+      avg_proficiency = mean(proficiency, na.rm = TRUE),
+      n_skills_measured = n(),
+      .groups = "drop"
+    )
+} else if (PROFICIENCY_METHOD == "new_skills_mastered") {
+  # Find first mastery week for each skill
+  if (nrow(all_proficiency) > 0) {
+    first_mastery <- all_proficiency %>%
+      filter(proficiency > 0.95) %>%
+      group_by(anon_student_id, kc_sub_skills) %>%
+      summarise(first_mastery_week = min(week_id), .groups = "drop")
+    
+    # Count new masteries per week
+    if (nrow(first_mastery) > 0) {
+      new_skills_per_week <- first_mastery %>%
+        group_by(anon_student_id, first_mastery_week) %>%
+        summarise(new_skills_mastered = n(), .groups = "drop") %>%
+        rename(week_id = first_mastery_week)
+    } else {
+      new_skills_per_week <- tibble(anon_student_id = character(), 
+                                    week_id = character(), 
+                                    new_skills_mastered = numeric())
+    }
+  } else {
+    new_skills_per_week <- tibble(anon_student_id = character(), 
+                                  week_id = character(), 
+                                  new_skills_mastered = numeric())
+  }
+  
+  # Create full grid and fill zeros
+  student_week_grid <- expand_grid(
+    anon_student_id = unique(d_with_week_id$anon_student_id),
+    week_id = all_weeks
+  )
+  
+  avg_proficiency <- student_week_grid %>%
+    left_join(new_skills_per_week, by = c("anon_student_id", "week_id")) %>%
+    mutate(
+      avg_proficiency = replace_na(new_skills_mastered, 0),
+      # NA because not applicable to this method of calculating proficiency
+      n_skills_measured = NA_integer_
+    ) %>%
+    select(-new_skills_mastered)
+}
+
+# Calculate behavioral metrics (from original data, not model-specific)
+student_week_basic <- d_with_week_id %>%
+  group_by(anon_student_id, week_id) %>%
+  reframe(
+    minutes_per_week = sum(duration_sec, na.rm = TRUE) / 60,
+    problems_solved = n_distinct(problem_name),
+    total_opportunities = n()
+  )
+
+# Extract student abilities before joining
+all_student_abilities <- bind_rows(lapply(successful_weeks, function(x) x$student_abilities))
+all_skill_easiness <- bind_rows(lapply(successful_weeks, function(x) x$skill_easiness))
+all_global_params <- bind_rows(lapply(successful_weeks, function(x) x$global_params))
+
+# Debug extracted data
+cat("\nExtracted AFM results:\n")
+cat("  Student abilities - rows:", nrow(all_student_abilities), 
+    ", weeks:", n_distinct(all_student_abilities$week_id), "\n")
+cat("  Skill easiness - rows:", nrow(all_skill_easiness),
+    ", weeks:", n_distinct(all_skill_easiness$week_id), "\n")
+if (nrow(all_student_abilities) > 0) {
+  cat("  Weeks with student data:", paste(sort(unique(all_student_abilities$week_id)), collapse=", "), "\n")
+}
+
+# Combine all metrics
+cat("\nCombining metrics:\n")
+cat("  Rows in student_week_basic:", nrow(student_week_basic), "\n")
+cat("  Rows in avg_proficiency:", nrow(avg_proficiency), "\n")
+cat("  Rows in all_difficulty:", nrow(all_difficulty), "\n")
+
+# Get the most recent student abilities for each student-week
+# (abilities from the model that was used to calculate that week's proficiency)
+cat("  Preparing student abilities for joining...\n")
+student_abilities_for_join <- all_student_abilities %>%
+  select(anon_student_id, week_id, student_ability = ability, student_learning_rate = learning_rate)
+
+final_aggregation <- student_week_basic %>%
+  left_join(avg_proficiency, by = c("anon_student_id", "week_id")) %>%
+  left_join(all_difficulty, by = c("anon_student_id", "week_id")) %>%
+  left_join(student_abilities_for_join, by = c("anon_student_id", "week_id")) %>%
+  arrange(anon_student_id, week_id)
+
+cat("  Rows in final_aggregation:", nrow(final_aggregation), "\n")
+cat("  Columns in final_aggregation:", paste(names(final_aggregation), collapse = ", "), "\n")
+
+# Debug join results
+cat("\nJoin results:\n")
+cat("  Rows with non-NA avg_proficiency:", sum(!is.na(final_aggregation$avg_proficiency)), "\n")
+cat("  Rows with non-NA week_difficulty:", sum(!is.na(final_aggregation$week_difficulty)), "\n")
+cat("  Rows with non-NA student_ability:", sum(!is.na(final_aggregation$student_ability)), "\n")
+
+# Add metadata about which model was used
+model_metadata <- bind_rows(lapply(successful_weeks, function(x) {
+  tibble(
+    week_id = x$week_id,
+    window_start = x$window_start,
+    window_size = x$window_size,
+    model_converged = x$model_converged
+  )
+}))
+
+# Save metadata
+write_csv(model_metadata, file.path(AFM_DIR, "model_metadata.csv"))
+
+# Save all student abilities across weeks (already extracted above)
+write_csv(all_student_abilities, file.path(AFM_DIR, "student_abilities_by_week.csv"))
+cat("Saved student abilities for", n_distinct(all_student_abilities$anon_student_id), "students across", 
+    n_distinct(all_student_abilities$week_id), "weeks\n")
+
+# Save all skill easiness values across weeks (already extracted above)
+write_csv(all_skill_easiness, file.path(AFM_DIR, "skill_easiness_by_week.csv"))
+cat("Saved skill easiness for", n_distinct(all_skill_easiness$kc_sub_skills), "skills across",
+    n_distinct(all_skill_easiness$week_id), "weeks\n")
+
+# Save global parameters for each week
+write_csv(all_global_params, file.path(AFM_DIR, "global_params_by_week.csv"))
+cat("Saved global parameters for", nrow(all_global_params), "weeks\n")
+
+cat("\nSummary:\n")
+cat("Successfully fitted models for", nrow(model_metadata), "out of", n_weeks, "weeks\n")
+cat("Total student-weeks in output:", nrow(final_aggregation), "\n")
+```
+
+# 5. Save final output
+
+```{r}
+# Debug: Check if week_difficulty exists before saving
+if ("week_difficulty" %in% names(final_aggregation)) {
+  cat("week_difficulty column exists in data frame\n")
+  cat("Number of non-NA week_difficulty values:", sum(!is.na(final_aggregation$week_difficulty)), "\n")
+  cat("Number of NA week_difficulty values:", sum(is.na(final_aggregation$week_difficulty)), "\n")
+} else {
+  cat("WARNING: week_difficulty column is missing!\n")
+}
+
+# Ensure all columns are present, filling NAs if needed
+# Also remove week_easiness if it exists (it's an intermediate calculation)
+final_aggregation_complete <- final_aggregation %>%
+  mutate(
+    week_difficulty = if ("week_difficulty" %in% names(.)) week_difficulty else NA_real_
+  ) %>%
+  select(-any_of("week_easiness"))  # Remove intermediate column if present
+
+write_csv(final_aggregation_complete, OUTPUT_FILE)
+
+cat("\nOutput saved to:", OUTPUT_FILE, "\n")
+cat("Models saved in:", AFM_DIR, "\n")
+cat("Columns in output:", paste(names(final_aggregation_complete), collapse = ", "), "\n")
+```
+
+# 6. Summary statistics
+
+```{r}
+cat("\n=== Summary Statistics ===\n")
+cat("Metric summaries:\n")
+# Select columns that exist
+summary_cols <- c("minutes_per_week", "problems_solved", "total_opportunities", "avg_proficiency")
+if ("week_difficulty" %in% names(final_aggregation)) summary_cols <- c(summary_cols, "week_difficulty")  
+if ("student_ability" %in% names(final_aggregation)) summary_cols <- c(summary_cols, "student_ability")
+if ("student_learning_rate" %in% names(final_aggregation)) summary_cols <- c(summary_cols, "student_learning_rate")
+
+print(summary(select(final_aggregation, all_of(summary_cols))))
+
+# Model convergence summary
+convergence_rate <- mean(model_metadata$model_converged, na.rm = TRUE) * 100
+cat("\nModel convergence rate:", round(convergence_rate, 1), "%\n")
+
+# Plot if in interactive mode
+if (interactive()) {
+  library(ggplot2)
+  
+  # Plot average proficiency over time
+  avg_by_week <- final_aggregation %>%
+    group_by(week_id) %>%
+    summarise(
+      mean_proficiency = mean(avg_proficiency, na.rm = TRUE),
+      mean_difficulty = mean(week_difficulty, na.rm = TRUE)
+    )
+  
+  p1 <- ggplot(avg_by_week, aes(x = week_id, y = mean_proficiency)) +
+    geom_line(group = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = "Average Proficiency Over Time (Rolling Window Models)")
+  
+  print(p1)
+}
+``` 

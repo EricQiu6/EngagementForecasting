@@ -143,9 +143,11 @@ class SchemaBasedTimeSeriesDataset(Dataset):
             features.append(feature_vec)
         
         # Target: next value using schema-defined target column
-        target_value = row[self.schema.target_column] if self.schema.target_column in row else 0.0
-        if hasattr(student_data.iloc[end_idx], self.schema.target_column):
-            target_value = student_data.iloc[end_idx][self.schema.target_column]
+        target_row = student_data.iloc[end_idx]
+        if self.schema.target_column in target_row:
+            target_value = target_row[self.schema.target_column]
+        else:
+            target_value = 0.0
         
         # Safe conversion
         target = self.feature_extractor._safe_float_conversion(target_value)

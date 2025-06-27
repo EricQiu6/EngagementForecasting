@@ -1,72 +1,45 @@
 """
-Core components of the time series framework.
+Core framework components.
+
+This module provides the foundational classes and utilities for the time series
+prediction framework, including data handling, model interfaces, and evaluation.
 """
 
-# Original components (for backward compatibility)
 from .base import (
     TimeSeriesModel,
     TimeSeriesDataset,
-    MetricsCalculator,
-    CrossValidator
+    CrossValidator,
+    MetricsCalculator
 )
 
 from .data import (
-    StudentTimeSeriesDataset,
-    DataLoaderFactory,
-    convert_legacy_format,
-    week_string_to_numeric,
-    safe_float_conversion
+    SchemaBasedTimeSeriesDataset,
+    DataLoaderFactory
 )
 
-# New schema-based components
 from .schema import (
     DataSchema,
-    ColumnSchema,
     DataValidator,
     FeatureExtractor,
-    get_schema,
-    SCHEMAS,
-    week_string_to_numeric as week_to_numeric_v2  # Updated version
+    week_string_to_numeric,
+    get_schema
 )
-
-from .data_v2 import (
-    SchemaBasedTimeSeriesDataset,
-    DataLoaderFactory as DataLoaderFactoryV2,
-    convert_legacy_format as convert_legacy_format_v2
-)
-
-# Fixed memory-efficient version
-try:
-    from .base_fixed import CrossValidator as CrossValidatorFixed
-except ImportError:
-    CrossValidatorFixed = None
 
 __all__ = [
     # Base classes
     'TimeSeriesModel',
     'TimeSeriesDataset',
-    'MetricsCalculator', 
     'CrossValidator',
-    'CrossValidatorFixed',
+    'MetricsCalculator',
     
-    # Original data components
-    'StudentTimeSeriesDataset',
-    'DataLoaderFactory',
-    'convert_legacy_format',
-    'week_string_to_numeric',
-    'safe_float_conversion',
-    
-    # Schema components
-    'DataSchema',
-    'ColumnSchema',
-    'DataValidator',
-    'FeatureExtractor',
-    'get_schema',
-    'SCHEMAS',
-    
-    # Schema-based data components
+    # Data handling
     'SchemaBasedTimeSeriesDataset',
-    'DataLoaderFactoryV2',
-    'convert_legacy_format_v2',
-    'week_to_numeric_v2'
+    'DataLoaderFactory',
+    
+    # Schema and validation
+    'DataSchema',
+    'DataValidator', 
+    'FeatureExtractor',
+    'week_string_to_numeric',
+    'get_schema'
 ] 

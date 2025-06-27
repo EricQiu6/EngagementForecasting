@@ -60,7 +60,6 @@ class TimeSeriesModel(ABC):
 class TimeSeriesDataset(ABC):
     """
     Abstract base class for time series datasets.
-    Supports both in-memory and streaming data loading.
     """
     
     @abstractmethod
@@ -93,12 +92,9 @@ class MetricsCalculator:
         mae = np.mean(np.abs(y_true - y_pred))
         rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
         smape = 100 * np.mean(2 * np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1e-8))
-        
-        # Additional metrics
         mape = 100 * np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8)))
         r2 = 1 - np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2)
         
-        # Convert numpy types to Python floats for JSON serialization
         return {
             'mae': float(mae),
             'rmse': float(rmse),
@@ -159,66 +155,15 @@ class CrossValidator:
     def _get_fold_data(self, indices):
         """Extract data for specific fold indices."""
         from ..core.data import DataLoaderFactory
-        from ..adapters.sklearn_adapter import SKLearnAdapter
         
-        # For sklearn models, use direct numpy arrays to avoid DataLoader overhead
-        if isinstance(self.model, SKLearnAdapter):
-            return self._get_fold_data_numpy(indices)
-        else:
-            # Use DataLoader for PyTorch models
-            batch_size = 32
-            dataloader = DataLoaderFactory.create_dataloader(
-                self.dataset, 
-                indices=indices, 
-                batch_size=batch_size, 
-                shuffle=False
-            )
-            return dataloader
-    
-    def _get_fold_data_numpy(self, indices):
-        """Extract data as numpy arrays directly for sklearn models (OPTIMIZED PATH)."""
-        # Use the dataset's preprocessing by getting individual samples
-        X_list = []
-        y_list = []
-        
-        for idx in indices:
-            features, target = self.dataset[idx]
-            
-            # Convert to numpy and flatten features for sklearn
-            features_np = features.numpy()  # Shape: (seq_len, n_features)
-            target_np = target.numpy().item()  # Single value
-            
-            # For sklearn, we need to flatten the sequence into a feature vector
-            # Extract features similar to sklearn adapter approach
-            seq_len, n_features = features_np.shape
-            lag_window = getattr(self.model, 'lag_window', 5)
-            
-            # Extract week (first column of last timestep)
-            week = features_np[-1, 0]
-            
-            # Extract lag features (target column from all timesteps)
-            if n_features >= 5:  # We have 5 features: week, minutes, problems, opportunities, prev_proficiency
-                lags_all = features_np[:, 4]  # Previous proficiency values (last column)
-            else:
-                lags_all = features_np[:, -1]  # Last column as fallback
-            
-            # Handle lag window sizing
-            if seq_len > lag_window:
-                # Take last lag_window values
-                lags_processed = lags_all[-lag_window:]
-            elif seq_len < lag_window:
-                # Pad with zeros at the beginning
-                lags_processed = np.pad(lags_all, (lag_window - seq_len, 0), mode='constant', constant_values=0)
-            else:
-                lags_processed = lags_all
-            
-            # Combine features: [week, lag1, lag2, ..., lagN]
-            row_features = np.concatenate([[week], lags_processed])
-            
-            X_list.append(row_features)
-            y_list.append(target_np)
-        
-        return np.array(X_list), np.array(y_list)
+        # Always use DataLoader - let the adapter handle conversion if needed
+        # This ensures consistent behavior and lets adapters use their own logic
+        return DataLoaderFactory.create_dataloader(
+            self.dataset, 
+            indices=indices, 
+            batch_size=32, 
+            shuffle=False
+        )
     
     def _extract_targets(self, data):
         """Extract target values from data (DataLoader or numpy arrays)."""
@@ -242,8 +187,8 @@ class CrossValidator:
             aggregated[f'{metric}_mean'] = float(np.mean(values))
             aggregated[f'{metric}_std'] = float(np.std(values))
             
-        aggregated['n_folds'] = int(len(fold_results))
-        aggregated['total_samples'] = int(sum(result['n_samples'] for result in fold_results))
-        aggregated['fold_results'] = fold_results  # fold_results now contains Python floats
+        aggregated['n_folds'] = len(fold_results)
+        aggregated['total_samples'] = sum(result['n_samples'] for result in fold_results)
+        aggregated['fold_results'] = fold_results
         
         return aggregated 

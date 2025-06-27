@@ -1,3 +1,7 @@
+"""
+Unified SKLearn adapter with optional schema support.
+"""
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -11,19 +15,53 @@ from ..core.base import TimeSeriesModel
 
 class SKLearnAdapter(TimeSeriesModel):
     """
-    Adapter to make sklearn-style models work with the new framework.
-    Handles both legacy numpy arrays and new DataLoader format.
+    Unified adapter for sklearn-style models with optional schema-based configuration.
+    Handles both legacy numpy arrays and DataLoader format.
     """
     
-    def __init__(self, sklearn_model, lag_window: int = 5):
+    def __init__(self, sklearn_model, schema: Optional['DataSchema'] = None, lag_window: int = 5):
         """
         Args:
             sklearn_model: Any sklearn-compatible model with fit/predict methods
-            lag_window: Number of lag features (for legacy compatibility)
+            schema: Optional DataSchema for schema-based configuration
+            lag_window: Number of lag features (for compatibility)
         """
         self.sklearn_model = sklearn_model
+        self.schema = schema
         self.lag_window = lag_window
         self.is_fitted = False
+        
+        # Initialize feature extractor if schema is provided
+        if self.schema:
+            from ..core.schema import FeatureExtractor
+            self.feature_extractor = FeatureExtractor(schema)
+            self._build_feature_mapping()
+        else:
+            self.feature_extractor = None
+            self.feature_map = {}
+            
+    def _build_feature_mapping(self):
+        """Build mapping of feature names to indices based on schema."""
+        self.feature_map = {}
+        
+        if not self.schema:
+            return
+            
+        # Map time column if it's in features
+        if self.schema.time_column in self.schema.feature_columns:
+            self.feature_map['time'] = self.schema.feature_columns.index(self.schema.time_column)
+        else:
+            self.feature_map['time'] = None
+            
+        # Map target column if it's in features (for lag features)
+        if self.schema.target_column in self.schema.feature_columns:
+            self.feature_map['target'] = self.schema.feature_columns.index(self.schema.target_column)
+        else:
+            self.feature_map['target'] = None
+            
+        # Map all feature names
+        for i, feature in enumerate(self.schema.feature_columns):
+            self.feature_map[feature] = i
         
     def fit(self, 
             train_data: Union[DataLoader, Tuple[np.ndarray, np.ndarray]], 
@@ -38,7 +76,7 @@ class SKLearnAdapter(TimeSeriesModel):
             **kwargs: Additional arguments (ignored for sklearn)
             
         Returns:
-            Training history (empty for sklearn)
+            Training info dictionary
         """
         
         if isinstance(train_data, DataLoader):
@@ -54,6 +92,7 @@ class SKLearnAdapter(TimeSeriesModel):
         
         return {
             'train_samples': len(X_train),
+            'feature_dim': X_train.shape[1] if len(X_train.shape) > 1 else 1,
             'status': 'completed'
         }
     
@@ -88,6 +127,11 @@ class SKLearnAdapter(TimeSeriesModel):
             'lag_window': self.lag_window
         }
         
+        # Add schema info if available
+        if self.schema:
+            params['schema'] = self.schema.__class__.__name__
+            params['n_features'] = len(self.schema.feature_columns)
+        
         # Get sklearn model parameters
         if hasattr(self.sklearn_model, 'get_params'):
             sklearn_params = self.sklearn_model.get_params()
@@ -106,6 +150,10 @@ class SKLearnAdapter(TimeSeriesModel):
             'model_type': type(self.sklearn_model).__name__
         }
         
+        # Save schema if available
+        if self.schema:
+            save_dict['schema'] = self.schema.to_config() if hasattr(self.schema, 'to_config') else None
+        
         # Use joblib for sklearn models (better than pickle)
         joblib.dump(save_dict, path)
     
@@ -116,11 +164,22 @@ class SKLearnAdapter(TimeSeriesModel):
         self.sklearn_model = save_dict['sklearn_model']
         self.lag_window = save_dict['lag_window']
         self.is_fitted = save_dict['is_fitted']
+        
+        # Load schema if available
+        if 'schema' in save_dict and save_dict['schema']:
+            try:
+                from ..core.schema import DataSchema, FeatureExtractor
+                self.schema = DataSchema.from_config(save_dict['schema'])
+                self.feature_extractor = FeatureExtractor(self.schema)
+                self._build_feature_mapping()
+            except:
+                self.schema = None
+                self.feature_extractor = None
     
     def _dataloader_to_arrays(self, dataloader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
         """
         Convert DataLoader to numpy arrays.
-        Handles both sequence data and flat feature data.
+        Uses schema-based extraction if schema is available, otherwise falls back to legacy behavior.
         OPTIMIZED VERSION: Uses vectorized operations for better performance.
         """
         # Collect all batches first
@@ -138,28 +197,12 @@ class SKLearnAdapter(TimeSeriesModel):
         # Handle different input shapes
         if len(X_all.shape) == 3:
             # Sequence data: (batch_size, sequence_length, n_features)
-            # Flatten to traditional format for sklearn using vectorized operations
-            batch_size, seq_len, n_features = X_all.shape
-            
-            # Extract week numbers (latest in each sequence)
-            weeks = X_all[:, -1, 0]  # Shape: (batch_size,)
-            
-            # Extract lag features (proficiency scores from all time steps)
-            lags_all = X_all[:, :, 1]  # Shape: (batch_size, seq_len)
-            
-            # Handle lag window sizing vectorized
-            if seq_len > self.lag_window:
-                # Take last lag_window values
-                lags_processed = lags_all[:, -self.lag_window:]
-            elif seq_len < self.lag_window:
-                # Pad with zeros at the beginning
-                pad_width = ((0, 0), (self.lag_window - seq_len, 0))
-                lags_processed = np.pad(lags_all, pad_width, mode='constant', constant_values=0)
+            if self.schema and self._should_create_lag_features():
+                # Schema-based lag feature creation
+                X_processed = self._create_lag_features_schema(X_all)
             else:
-                lags_processed = lags_all
-            
-            # Combine features: [week, lag1, lag2, ..., lagN] for each sample
-            X_processed = np.column_stack([weeks, lags_processed])
+                # Legacy lag feature creation or simple flattening
+                X_processed = self._create_lag_features_legacy(X_all)
                     
         else:
             # Already flat features: (batch_size, n_features)
@@ -173,6 +216,89 @@ class SKLearnAdapter(TimeSeriesModel):
             y_processed = y_all
         
         return X_processed, y_processed
+    
+    def _should_create_lag_features(self) -> bool:
+        """Determine if we should create lag features based on schema."""
+        # Create lag features if we have both time and target columns in features
+        return (self.feature_map.get('time') is not None and 
+                self.feature_map.get('target') is not None)
+    
+    def _create_lag_features_schema(self, X_all: np.ndarray) -> np.ndarray:
+        """Create lag features using schema-based indexing."""
+        batch_size, seq_len, n_features = X_all.shape
+        
+        # Get indices from schema
+        time_idx = self.feature_map.get('time')
+        target_idx = self.feature_map.get('target')
+        
+        if time_idx is None or target_idx is None:
+            # Fallback to simple flattening
+            return X_all[:, -1, :]
+        
+        # Extract components using schema indices
+        times = X_all[:, -1, time_idx]  # Latest time for each sequence
+        
+        # Extract lag values from target feature
+        lag_values = X_all[:, :, target_idx]  # All time steps for target
+        
+        # Handle lag window sizing
+        if seq_len > self.lag_window:
+            # Take last lag_window values
+            lags_processed = lag_values[:, -self.lag_window:]
+        elif seq_len < self.lag_window:
+            # Pad with zeros at the beginning
+            pad_width = ((0, 0), (self.lag_window - seq_len, 0))
+            lags_processed = np.pad(lag_values, pad_width, mode='constant', constant_values=0)
+        else:
+            lags_processed = lag_values
+        
+        # Combine features: [time, lag1, lag2, ..., lagN]
+        X_processed = np.column_stack([times, lags_processed])
+        
+        # Add other features from the last time step if needed
+        other_features = []
+        for feature_name, idx in self.feature_map.items():
+            if feature_name not in ['time', 'target'] and idx is not None:
+                other_features.append(X_all[:, -1, idx])
+        
+        if other_features:
+            X_processed = np.column_stack([X_processed] + other_features)
+        
+        return X_processed
+    
+    def _create_lag_features_legacy(self, X_all: np.ndarray) -> np.ndarray:
+        """
+        Create lag features using legacy hardcoded indices.
+        Used when no schema is available for backward compatibility.
+        """
+        batch_size, seq_len, n_features = X_all.shape
+        
+        # Legacy behavior: assume first feature is time, second is target
+        # Extract week numbers (latest in each sequence)
+        weeks = X_all[:, -1, 0]  # Shape: (batch_size,)
+        
+        # Extract lag features (proficiency scores from all time steps)
+        lags_all = X_all[:, :, 1]  # Shape: (batch_size, seq_len)
+        
+        # Handle lag window sizing vectorized
+        if seq_len > self.lag_window:
+            # Take last lag_window values
+            lags_processed = lags_all[:, -self.lag_window:]
+        elif seq_len < self.lag_window:
+            # Pad with zeros at the beginning
+            pad_width = ((0, 0), (self.lag_window - seq_len, 0))
+            lags_processed = np.pad(lags_all, pad_width, mode='constant', constant_values=0)
+        else:
+            lags_processed = lags_all
+        
+        # Combine features: [week, lag1, lag2, ..., lagN] for each sample
+        X_processed = np.column_stack([weeks, lags_processed])
+        
+        return X_processed
+
+
+# Alias for backward compatibility
+SchemaBasedSKLearnAdapter = SKLearnAdapter
 
 
 class LegacyFrameworkAdapter:

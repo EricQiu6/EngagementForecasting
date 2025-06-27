@@ -28,8 +28,8 @@ warnings.filterwarnings('ignore')
 
 # Schema-based framework imports
 from src.framework.core.schema import get_schema, DataSchema
-from src.framework.core.data_v2 import SchemaBasedTimeSeriesDataset
-from src.framework.adapters.sklearn_adapter_v2 import SchemaBasedSKLearnAdapter
+from src.framework.core.data import SchemaBasedTimeSeriesDataset
+from src.framework.adapters import SchemaBasedSKLearnAdapter
 from src.framework.core.base import CrossValidator, MetricsCalculator
 
 # Algorithm imports
@@ -220,9 +220,7 @@ def setup_evaluation_data():
     
     # Check available data files
     data_files = {
-        'student_week_rolling': '../data-analysis/student_week_aggregations_rolling_new.csv',
-        'legacy': 'data/data_tidied.csv',
-        'comparison': 'comparison_test_data.csv'
+        'student_week_rolling': '../data-analysis/student_week_aggregations_rolling_new.csv'
     }
     
     available_data = {}

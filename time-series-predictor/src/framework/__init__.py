@@ -1,58 +1,44 @@
 """
-Time Series Prediction Framework V2
+Time Series Prediction Framework
 
-A flexible, schema-driven framework for time series prediction that eliminates
-hardcoded column names and provides configurable data handling.
-
-Key Features:
-- Schema-based data handling (no hardcoded columns)
-- Configurable feature extraction
-- Built-in data validation
-- Type consistency enforcement
-- Configuration-driven experiments
-- Backward compatibility with legacy code
+A comprehensive framework for time series prediction with support for
+both traditional machine learning and deep learning models.
 """
 
-# Core components
 from .core import (
     # Base classes
     TimeSeriesModel,
     TimeSeriesDataset,
-    MetricsCalculator,
     CrossValidator,
-    CrossValidatorFixed,
+    MetricsCalculator,
     
-    # Data components
-    StudentTimeSeriesDataset,
+    # Data handling
+    SchemaBasedTimeSeriesDataset,
     DataLoaderFactory,
-    convert_legacy_format,
     
-    # Schema components
+    # Schema and validation
     DataSchema,
-    ColumnSchema,
     DataValidator,
     FeatureExtractor,
-    get_schema,
-    SCHEMAS,
-    
-    # Schema-based data components
-    SchemaBasedTimeSeriesDataset,
-    DataLoaderFactoryV2
+    week_string_to_numeric,
+    get_schema
 )
 
-# Adapters
 from .adapters import (
     SKLearnAdapter,
     PyTorchAdapter,
-    LegacyFrameworkAdapter,
-    SchemaBasedSKLearnAdapter,
-    LegacyCompatibilityAdapter
+    SchemaBasedSKLearnAdapter
 )
 
-# Models
-from .models import create_model
+from .models import (
+    SimpleMLP,
+    SimpleLSTM,
+    TimeSeriesCNN,
+    AttentionLSTM,
+    SimpleTransformer,
+    create_model
+)
 
-# Utilities
 from .utils import (
     get_device,
     get_device_info,
@@ -60,69 +46,43 @@ from .utils import (
     clear_cuda_cache
 )
 
-# Configuration management
-from .config import (
-    ExperimentConfig,
-    DataConfig,
-    ModelConfig,
-    TrainingConfig,
-    ConfigManager,
-    load_config,
-    save_config,
-    create_config,
-    get_schema_from_config
-)
-
-# Version info
-__version__ = '2.0.0'
-
 __all__ = [
-    # Core classes
+    # Core components
     'TimeSeriesModel',
-    'TimeSeriesDataset',
-    'MetricsCalculator',
+    'TimeSeriesDataset', 
     'CrossValidator',
-    'CrossValidatorFixed',
+    'MetricsCalculator',
     
-    # Data components
-    'StudentTimeSeriesDataset',
+    # Data handling
     'SchemaBasedTimeSeriesDataset',
     'DataLoaderFactory',
-    'DataLoaderFactoryV2',
-    'convert_legacy_format',
     
-    # Schema components
+    # Schema and validation
     'DataSchema',
-    'ColumnSchema',
     'DataValidator',
     'FeatureExtractor',
+    'week_string_to_numeric',
     'get_schema',
-    'SCHEMAS',
     
     # Adapters
     'SKLearnAdapter',
-    'SchemaBasedSKLearnAdapter',
     'PyTorchAdapter',
-    'LegacyFrameworkAdapter',
-    'LegacyCompatibilityAdapter',
+    'SchemaBasedSKLearnAdapter',
     
     # Models
+    'SimpleMLP',
+    'SimpleLSTM',
+    'TimeSeriesCNN',
+    'AttentionLSTM',
+    'SimpleTransformer',
     'create_model',
     
-    # Utilities
+    # Utils
     'get_device',
     'get_device_info',
     'print_device_info',
-    'clear_cuda_cache',
-    
-    # Configuration
-    'ExperimentConfig',
-    'DataConfig',
-    'ModelConfig',
-    'TrainingConfig',
-    'ConfigManager',
-    'load_config',
-    'save_config',
-    'create_config',
-    'get_schema_from_config'
+    'clear_cuda_cache'
 ] 
+
+# Version info
+__version__ = '2.0.0' 

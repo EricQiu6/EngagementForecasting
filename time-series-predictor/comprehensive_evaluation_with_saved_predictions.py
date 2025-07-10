@@ -23,24 +23,39 @@ from typing import Dict, List, Tuple, Any
 from src.framework.core.schema import get_schema, DataSchema
 from src.framework.core.data import SchemaBasedTimeSeriesDataset
 from src.framework.adapters import SchemaBasedSKLearnAdapter, PyTorchAdapter
-from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
 from src.framework.core.base import CrossValidator, MetricsCalculator
 
 # Model imports
 from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, HuberRegressor
-from xgboost import XGBRegressor
 
 # Framework models
 from src.framework.models.baselines import AveragePredictor, NaiveForecast, MedianPredictor, MedianPredictorNoZeros, MeanPredictorNoZeros
-from src.framework.models.goal_based_predictor import GoalBasedPredictor
-from src.framework.models.DLinear import DLinearWrapper
 from src.framework.models.neural_nets import SimpleLSTM, create_model
-from src.framework.models.student_ability_model import StudentAbilityLinearModel, StudentAbilityNeuralModel
 
-# Mixed effects
-from src.framework.adapters.true_mixed_effects_adapter import TrueMixedEffectsModel
-from src.framework.adapters.true_mixed_effects_sklearn_wrapper import TrueMixedEffectsSKLearnWrapper
+# Try to import optional dependencies
+try:
+    from src.framework.models.goal_based_predictor import GoalBasedPredictor
+    HAS_GOAL_BASED = True
+except ImportError:
+    HAS_GOAL_BASED = False
+    print("Goal-based predictor not available")
+
+try:
+    from xgboost import XGBRegressor
+    HAS_XGBOOST = True
+except ImportError:
+    HAS_XGBOOST = False
+    print("XGBoost not available")
+
+try:
+    from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
+    from src.framework.adapters.true_mixed_effects_adapter import TrueMixedEffectsModel
+    from src.framework.adapters.true_mixed_effects_sklearn_wrapper import TrueMixedEffectsSKLearnWrapper
+    HAS_MIXED_EFFECTS = True
+except ImportError:
+    HAS_MIXED_EFFECTS = False
+    print("Mixed effects models not available")
 
 
 class PredictionSaver:
@@ -170,12 +185,13 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
         'description': 'Mean excluding zero values'
     }
     
-    # 2. Goal-based predictors (Adam's method)
-    models['goal_based_50'] = {
-        'model': GoalBasedPredictor(adjustment_factor=0.5, random_state=42),
-        'category': 'goal_based',
-        'description': 'Adam\'s method with 50th percentile'
-    }
+    # 2. Goal-based predictors (if available)
+    if HAS_GOAL_BASED:
+        models['goal_based_50'] = {
+            'model': GoalBasedPredictor(adjustment_factor=0.5, random_state=42),
+            'category': 'goal_based',
+            'description': 'Adam\'s method with 50th percentile'
+        }
     
     # 3. Linear Models
     models['linear_regression'] = {
@@ -208,27 +224,30 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
         'description': 'Random Forest with tuned hyperparameters'
     }
     
-    models['xgboost'] = {
-        'model': XGBRegressor(
-            n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            random_state=42
-        ),
-        'category': 'tree',
-        'description': 'XGBoost with tuned hyperparameters'
-    }
+    # 5. XGBoost (if available)
+    if HAS_XGBOOST:
+        models['xgboost'] = {
+            'model': XGBRegressor(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=42
+            ),
+            'category': 'tree',
+            'description': 'XGBoost with tuned hyperparameters'
+        }
     
-    # 5. Mixed Effects Models
-    models['mixed_effects_wrapper'] = {
-        'model': TrueMixedEffectsSKLearnWrapper(
-            target_col='minutes_per_week',
-            n_lags=5
-        ),
-        'category': 'mixed_effects',
-        'description': 'Simplified mixed effects with student effects',
-        'requires_student_id': True
-    }
+    # 6. Mixed Effects Models (if available)
+    if HAS_MIXED_EFFECTS:
+        models['mixed_effects_wrapper'] = {
+            'model': TrueMixedEffectsSKLearnWrapper(
+                target_col='minutes_per_week',
+                n_lags=5
+            ),
+            'category': 'mixed_effects',
+            'description': 'Simplified mixed effects with student effects',
+            'requires_student_id': True
+        }
     
     return models
 
@@ -257,6 +276,12 @@ def run_evaluation_with_predictions(
     
     # Load data
     data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
+    
+    # Check if data file exists
+    if not Path(data_path).exists():
+        print(f"❌ Data file not found: {data_path}")
+        print("Please ensure the data file exists or update the path.")
+        return None
     
     # Select schema based on target type
     if target_type == 'minutes_per_week':
@@ -298,11 +323,15 @@ def run_evaluation_with_predictions(
             # Create appropriate adapter
             if model_config.get('requires_student_id', False):
                 # Mixed effects model
-                adapter = MixedEffectsSKLearnAdapter(
-                    mixed_effects_model=model_config['model'],
-                    schema=schema,
-                    lag_window=window_size
-                )
+                if HAS_MIXED_EFFECTS:
+                    adapter = MixedEffectsSKLearnAdapter(
+                        mixed_effects_model=model_config['model'],
+                        schema=schema,
+                        lag_window=window_size
+                    )
+                else:
+                    print("❌ Mixed effects not available, skipping...")
+                    continue
             else:
                 # Standard sklearn model
                 adapter = SchemaBasedSKLearnAdapter(

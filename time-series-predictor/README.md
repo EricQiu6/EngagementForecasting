@@ -20,7 +20,7 @@ src/framework/
 │   └── zero_inflated_model.py    # Don't worry about this
 ├── utils/                 # Utility functions
 │   └── device.py          # GPU/CPU device management
-└── config.py              # Configuration management
+└── config.py              # Configuration management, haven't really tested this
 ```
 
 ## Core Idea

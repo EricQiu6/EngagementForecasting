@@ -32,6 +32,17 @@ from src.framework.core.data import SchemaBasedTimeSeriesDataset
 from src.framework.adapters import SchemaBasedSKLearnAdapter
 from src.framework.core.base import CrossValidator, MetricsCalculator
 
+# Mixed effects imports (optional)
+try:
+    from src.framework.adapters.mixed_effects_sklearn_adapter import (
+        MixedEffectsSKLearnWrapper,
+        MixedEffectsSKLearnAdapter
+    )
+    HAS_MIXED_EFFECTS = True
+except ImportError:
+    HAS_MIXED_EFFECTS = False
+    print("Mixed effects models not available")
+
 # Algorithm imports
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
@@ -40,7 +51,12 @@ from sklearn.dummy import DummyRegressor
 from sklearn.neural_network import MLPRegressor
 
 # Import existing baseline models from our framework
-from src.framework.models.baselines import AveragePredictor, NaiveForecast, LinearTrend
+from src.framework.models.baselines import AveragePredictor, NaiveForecast, LinearTrend, DLinearWrapper
+from src.framework.models.neural_nets import SimpleLSTM
+from src.framework.adapters.pytorch_adapter import PyTorchAdapter
+
+# Import the new goal-based predictor
+from src.framework.models.goal_based_predictor import GoalBasedPredictor
 
 try:
     import xgboost as xgb
@@ -80,142 +96,169 @@ class TrivialBaselines:
 # Remove duplicate StudentAbilityModel - we'll use the existing one from the models directory
 
 
-def create_algorithm_configs():
-    """Create configurations for all algorithms to evaluate."""
+def create_algorithm_configs(schema=None):
+    """Create configurations for verified algorithms only."""
     
     algorithms = {
-        # Trivial baselines (using our framework's baseline models)
-        'average_predictor': {
-            'model': AveragePredictor(),
-            'description': 'Historical average predictor',
-            'category': 'trivial'
+        # # Verified baselines
+        # 'average_predictor': {
+        #     'model': AveragePredictor(),
+        #     'description': 'Historical average predictor',
+        #     'category': 'baseline'
+        # },
+        
+        # 'naive_forecast': {
+        #     'model': NaiveForecast(),
+        #     'description': 'Last value predictor',
+        #     'category': 'baseline'
+        # },
+        
+        # Goal-based predictors
+        'goal_based_predictor': {
+            'model': GoalBasedPredictor(random_state=42),
+            'description': 'Goal-based predictor (random first 8, then median)',
+            'category': 'baseline'
         },
         
-        'naive_forecast': {
-            'model': NaiveForecast(),
-            'description': 'Naive forecast (last value)',
-            'category': 'trivial'
-        },
+        # 'adaptive_goal_predictor': {
+        #     'model': AdaptiveGoalPredictor(random_state=42),
+        #     'description': 'Adaptive goal-based predictor',
+        #     'category': 'baseline'
+        # },
         
-        'linear_trend': {
-            'model': LinearTrend(),
-            'description': 'Simple linear trend model',
-            'category': 'trivial'
-        },
+        # Classical ML
+        # 'linear_regression': {
+        #     'model': LinearRegression(),
+        #     'description': 'Simple linear regression',
+        #     'category': 'classical'
+        # },
         
-        # Sklearn baselines for comparison
-        'mean_baseline': {
-            'model': TrivialBaselines.create_averaging_model(),
-            'description': 'Always predicts the mean value (sklearn)',
-            'category': 'trivial'
-        },
+        # 'ridge': {
+        #     'model': Ridge(alpha=1.0),
+        #     'description': 'Ridge regression',
+        #     'category': 'classical'
+        # },
         
-        'last_value': {
-            'model': TrivialBaselines.create_last_value_model(),
-            'description': 'Predicts the last observed value (custom)',
-            'category': 'trivial'
-        },
-        
-        # Classical ML algorithms
-        'linear_regression': {
-            'model': LinearRegression(),
-            'description': 'Simple linear regression',
-            'category': 'classical'
-        },
-        
-        'ridge_regression': {
-            'model': Ridge(alpha=1.0),
-            'description': 'Ridge regression with L2 regularization',
-            'category': 'classical'
-        },
-        
-        'lasso_regression': {
+        'lasso': {
             'model': Lasso(alpha=0.1),
-            'description': 'Lasso regression with L1 regularization',
+            'description': 'Lasso regression',
             'category': 'classical'
         },
         
-        'elastic_net': {
-            'model': ElasticNet(alpha=0.1, l1_ratio=0.5),
-            'description': 'Elastic Net with L1 and L2 regularization',
-            'category': 'classical'
-        },
+        # 'random_forest': {
+        #     'model': RandomForestRegressor(
+        #         n_estimators=100,
+        #         max_depth=10,
+        #         random_state=42
+        #     ),
+        #     'description': 'Random Forest',
+        #     'category': 'ensemble'
+        # },
         
-        'random_forest': {
-            'model': RandomForestRegressor(
-                n_estimators=100,
-                max_depth=10,
-                min_samples_split=5,
-                min_samples_leaf=2,
-                random_state=42
-            ),
-            'description': 'Random Forest with 100 trees',
-            'category': 'ensemble'
-        },
+        # Time series specific
+        # 'dlinear': {
+        #     'model': DLinearWrapper(seq_len=15, kernel_size=3),
+        #     'description': 'DLinear decomposition model',
+        #     'category': 'time_series'
+        # },
         
-        'gradient_boosting': {
-            'model': GradientBoostingRegressor(
-                n_estimators=100,
-                learning_rate=0.1,
-                max_depth=6,
-                random_state=42
-            ),
-            'description': 'Gradient Boosting Machine',
-            'category': 'ensemble'
-        },
-        
-        'svr_rbf': {
-            'model': SVR(kernel='rbf', C=1.0, gamma='scale'),
-            'description': 'Support Vector Regression with RBF kernel',
-            'category': 'classical'
-        },
-        
-        'mlp_small': {
-            'model': MLPRegressor(
-                hidden_layer_sizes=(50,),
-                activation='relu',
-                solver='adam',
-                alpha=0.01,
-                max_iter=500,
-                random_state=42
-            ),
-            'description': 'Small Multi-Layer Perceptron (1 hidden layer, 50 units)',
-            'category': 'neural'
-        },
-        
-        'mlp_medium': {
-            'model': MLPRegressor(
-                hidden_layer_sizes=(100, 50),
-                activation='relu',
-                solver='adam',
-                alpha=0.01,
-                max_iter=500,
-                random_state=42
-            ),
-            'description': 'Medium Multi-Layer Perceptron (2 hidden layers)',
-            'category': 'neural'
-        },
-        
-        # Note: Student ability models will be added separately if data supports them
+        # Neural networks with SKLearnAdapter
+        # 'mlp': {
+        #     'model': MLPRegressor(
+        #         hidden_layer_sizes=(64, 32),
+        #         activation='relu',
+        #         solver='adam',
+        #         alpha=0.01,
+        #         learning_rate_init=0.001,
+        #         max_iter=500,
+        #         early_stopping=True,
+        #         validation_fraction=0.1,
+        #         n_iter_no_change=10,
+        #         random_state=42
+        #     ),
+        #     'description': 'Multi-Layer Perceptron',
+        #     'category': 'neural'
+        # },
     }
     
     # Add XGBoost if available
-    if HAS_XGBOOST:
-        algorithms['xgboost'] = {
-            'model': xgb.XGBRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42
-            ),
-            'description': 'XGBoost Gradient Boosting',
-            'category': 'ensemble'
-        }
+    # if HAS_XGBOOST:
+    #     algorithms['xgboost'] = {
+    #         'model': xgb.XGBRegressor(
+    #             n_estimators=100,
+    #             max_depth=6,
+    #             learning_rate=0.1,
+    #             random_state=42
+    #         ),
+    #         'description': 'XGBoost Gradient Boosting',
+    #         'category': 'ensemble'
+    #     }
+    
+    # Add Mixed Effects models
+    # if HAS_MIXED_EFFECTS:
+    #     # Comment out for now - the current wrapper has a different interface
+    #     """
+    #     # Vanilla Mixed Effects
+    #     algorithms['mixed_effects_vanilla'] = {
+    #         'model': MixedEffectsSKLearnWrapper(
+    #             model_type='vanilla',
+    #             re_formula='1'
+    #         ),
+    #         'description': 'Mixed Effects (vanilla)',
+    #         'category': 'mixed_effects',
+    #         'requires_student_id': True
+    #     }
+    #     
+    #     # LASSO + Mixed Effects
+    #     algorithms['mixed_effects_lasso'] = {
+    #         'model': MixedEffectsSKLearnWrapper(
+    #             model_type='lasso',
+    #             re_formula='1',
+    #             lasso_alpha=None  # Auto-select via CV
+    #         ),
+    #         'description': 'Mixed Effects (LASSO)',
+    #         'category': 'mixed_effects',
+    #         'requires_student_id': True
+    #     }
+    #     
+    #     # Ensemble Mixed Effects
+    #     algorithms['mixed_effects_ensemble'] = {
+    #         'model': MixedEffectsSKLearnWrapper(
+    #             model_type='ensemble',
+    #             re_formula='1'
+    #         ),
+    #         'description': 'Mixed Effects (ensemble)',
+    #         'category': 'mixed_effects',
+    #         'requires_student_id': True
+    #     }
+    #     """
+    #     
+    #     # Use the actual interface for now
+    #     # Get target column from schema if available
+    #     target_col = schema.target_column if schema else 'minutes_per_week'
+    #     
+    #     algorithms['mixed_effects_baseline'] = {
+    #         'model': MixedEffectsSKLearnWrapper(
+    #             target_col=target_col,
+    #             n_lags=5,
+    #             use_simple_baseline=True
+    #         ),
+    #         'description': 'Mixed Effects (baseline)',
+    #         'category': 'mixed_effects',
+    #         'requires_student_id': False  # This version doesn't need explicit student IDs
+    #     }
+    #     
+    #     print("✅ Mixed effects models added to evaluation")
+    # else:
+    #     print("⚠️  Mixed effects models not available")
+    
+    # Note: LSTM requires PyTorchAdapter, so we'll add it separately
+    # It needs different handling in the evaluation loop
     
     return algorithms
 
 
-def setup_evaluation_data():
+def setup_evaluation_data(schema_name=None):
     """Setup data with realistic evaluation settings."""
     
     # Check available data files
@@ -243,10 +286,9 @@ def setup_evaluation_data():
     print(f"Shape: {df.shape}")
     print(f"Columns: {list(df.columns)}")
     
-    # Determine appropriate schema
-    if 'name' in df.columns and 'week' in df.columns and 'proficient' in df.columns:
-        schema_name = 'legacy'
-        print(f"Using legacy schema")
+    # Use provided schema or determine appropriate one
+    if schema_name:
+        print(f"Using provided schema: {schema_name}")
     elif 'anon_student_id' in df.columns and 'week_id' in df.columns and 'avg_proficiency' in df.columns:
         # Check if we have extended features for student ability models
         extended_features = ['student_ability', 'student_learning_rate', 'week_difficulty']
@@ -338,7 +380,7 @@ def add_student_ability_models_if_possible(algorithms, schema, dataset):
     return algorithms
 
 
-def run_comprehensive_evaluation():
+def run_comprehensive_evaluation(schema_name=None):
     """Run comprehensive evaluation with realistic settings."""
     
     print("=" * 80)
@@ -346,23 +388,20 @@ def run_comprehensive_evaluation():
     print("=" * 80)
     
     # Setup data
-    data_path, schema_name = setup_evaluation_data()
+    data_path, schema_name = setup_evaluation_data(schema_name)
     
-    if schema_name == 'legacy':
-        schema = get_schema('legacy')
-    elif schema_name == 'student_week':
-        schema = get_schema('student_week')
-    elif schema_name == 'extended':
-        schema = get_schema('extended')
+    if isinstance(schema_name, str):
+        # Get predefined schema by name
+        schema = get_schema(schema_name)
     else:
         # Use custom schema created in setup
         schema = schema_name  # This would be the DataSchema object
     
     # Realistic evaluation settings
     evaluation_config = {
-        'sequence_length': 8,  # Sufficient history
-        'n_splits': 5,         # Appropriate number of folds
-        'test_size': 2,        # Test on 2 weeks
+        'sequence_length': 15,  # Extended history window
+        'n_splits': 5,          # Appropriate number of folds
+        'test_size': 1,         # Test on 1 week
         'min_samples_per_student': 10,  # Minimum data per student
         'validation_strategy': 'time_series_cv'
     }
@@ -370,6 +409,8 @@ def run_comprehensive_evaluation():
     print(f"\nEvaluation Configuration:")
     for key, value in evaluation_config.items():
         print(f"  {key}: {value}")
+    
+    print(f"\n🎯 Target variable: {schema.target_column}")
     
     # Create dataset with realistic settings
     print(f"\nCreating dataset...")
@@ -383,10 +424,23 @@ def run_comprehensive_evaluation():
     print(f"Dataset created: {len(dataset)} sequences")
     
     # Get algorithms
-    algorithms = create_algorithm_configs()
+    algorithms = create_algorithm_configs(schema)
     
-    # Check if we can add student ability models
-    algorithms = add_student_ability_models_if_possible(algorithms, schema, dataset)
+    # Add LSTM back to evaluation
+    algorithms['lstm'] = {
+        'model': PyTorchAdapter(
+            SimpleLSTM(
+                input_size=len(schema.feature_columns),
+                hidden_size=64,
+                num_layers=2,
+                dropout=0.2
+            ),
+            schema=schema
+        ),
+        'description': 'LSTM with temporal modeling',
+        'category': 'neural',
+        'is_pytorch': True
+    }
     
     print(f"\nAlgorithms to evaluate: {len(algorithms)}")
     for name, config in algorithms.items():
@@ -404,24 +458,44 @@ def run_comprehensive_evaluation():
         start_time = time.time()
         
         try:
-            # Check if this is already a schema-based model (like PyTorch models)
-            if hasattr(algo_config['model'], 'fit') and hasattr(algo_config['model'], 'predict') and hasattr(algo_config['model'], 'schema'):
-                # Already a schema-based model (e.g., PyTorch adapter)
+            # Check if this is a PyTorch model
+            if algo_config.get('is_pytorch', False):
+                # PyTorch model - already has adapter
                 model = algo_config['model']
-            else:
-                # Create schema-based adapter for sklearn models
-                model = SchemaBasedSKLearnAdapter(
-                    sklearn_model=algo_config['model'],
-                    schema=schema,
-                    lag_window=evaluation_config['sequence_length']
+                cv = CrossValidator(model, dataset)
+                # Use fewer epochs for faster evaluation
+                cv_results = cv.cross_validate(
+                    n_splits=evaluation_config['n_splits'],
+                    test_size=evaluation_config['test_size'],
+                    epochs=50,
+                    batch_size=32,
+                    early_stopping_patience=5,
+                    verbose=False
                 )
-            
-            # Run cross-validation
-            cv = CrossValidator(model, dataset)
-            cv_results = cv.cross_validate(
-                n_splits=evaluation_config['n_splits'],
-                test_size=evaluation_config['test_size']
-            )
+            else:
+                # Check if this is a mixed effects model
+                if algo_config.get('requires_student_id', False):
+                    # Mixed effects model - needs special adapter
+                    from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
+                    model = MixedEffectsSKLearnAdapter(
+                        mixed_effects_model=algo_config['model'],
+                        schema=schema,
+                        lag_window=evaluation_config['sequence_length']
+                    )
+                else:
+                    # Create schema-based adapter for sklearn models
+                    model = SchemaBasedSKLearnAdapter(
+                        sklearn_model=algo_config['model'],
+                        schema=schema,
+                        lag_window=evaluation_config['sequence_length']
+                    )
+                
+                # Run cross-validation
+                cv = CrossValidator(model, dataset)
+                cv_results = cv.cross_validate(
+                    n_splits=evaluation_config['n_splits'],
+                    test_size=evaluation_config['test_size']
+                )
             
             # Store results
             results[algo_name] = {
@@ -566,29 +640,42 @@ def save_results(results, df_results, config):
 def main():
     """Main evaluation function."""
     
+    import argparse
+    parser = argparse.ArgumentParser(description='Comprehensive time series algorithm evaluation')
+    parser.add_argument('--schema', type=str, default=None,
+                        help='Schema name to use (e.g., legacy, student_week, extended, time_goal, time_goal_extended)')
+    parser.add_argument('--window-analysis', action='store_true',
+                        help='Run window size analysis (5 to 30 weeks)')
+    args = parser.parse_args()
+    
     print("🚀 Starting comprehensive time series algorithm evaluation...")
     print("Using the new schema-based framework with realistic settings.")
     
     try:
-        # Run evaluation
-        results, config = run_comprehensive_evaluation()
-        
-        # Analyze results
-        df_results = analyze_results(results, config)
-        
-        print(f"\n" + "=" * 80)
-        print("EVALUATION COMPLETE!")
-        print("=" * 80)
-        
-        if df_results is not None and len(df_results) > 0:
-            best_algorithm = df_results.iloc[0]
-            print(f"\n🏆 BEST PERFORMING ALGORITHM:")
-            print(f"  Name: {best_algorithm['Algorithm']}")
-            print(f"  Category: {best_algorithm['Category']}")
-            print(f"  MAE: {best_algorithm['MAE_Mean']:.3f} ± {best_algorithm['MAE_Std']:.3f}")
-            print(f"  RMSE: {best_algorithm['RMSE_Mean']:.3f} ± {best_algorithm['RMSE_Std']:.3f}")
-            print(f"  Training Time: {best_algorithm['Training_Time']:.1f}s")
-            print(f"  Description: {best_algorithm['Description']}")
+        if args.window_analysis:
+            # Run window size analysis
+            print("\n📊 Running window size analysis...")
+            run_window_size_analysis(args.schema)
+        else:
+            # Run standard evaluation
+            results, config = run_comprehensive_evaluation(args.schema)
+            
+            # Analyze results
+            df_results = analyze_results(results, config)
+            
+            print(f"\n" + "=" * 80)
+            print("EVALUATION COMPLETE!")
+            print("=" * 80)
+            
+            if df_results is not None and len(df_results) > 0:
+                best_algorithm = df_results.iloc[0]
+                print(f"\n🏆 BEST PERFORMING ALGORITHM:")
+                print(f"  Name: {best_algorithm['Algorithm']}")
+                print(f"  Category: {best_algorithm['Category']}")
+                print(f"  MAE: {best_algorithm['MAE_Mean']:.3f} ± {best_algorithm['MAE_Std']:.3f}")
+                print(f"  RMSE: {best_algorithm['RMSE_Mean']:.3f} ± {best_algorithm['RMSE_Std']:.3f}")
+                print(f"  Training Time: {best_algorithm['Training_Time']:.1f}s")
+                print(f"  Description: {best_algorithm['Description']}")
         
         print(f"\n✅ Evaluation completed successfully!")
         
@@ -596,6 +683,500 @@ def main():
         print(f"❌ Evaluation failed: {str(e)}")
         import traceback
         traceback.print_exc()
+
+
+def run_window_size_analysis(schema_name=None):
+    """
+    Run comprehensive window size analysis from 5 to 30 weeks.
+    Analyzes model performance, consistency, learning curves, and stability.
+    """
+    from scipy import stats
+    from sklearn.metrics import r2_score
+    
+    print("=" * 80)
+    print("WINDOW SIZE ANALYSIS")
+    print("=" * 80)
+    
+    # Setup data
+    data_path, schema_name = setup_evaluation_data(schema_name)
+    
+    if isinstance(schema_name, str):
+        schema = get_schema(schema_name)
+    else:
+        schema = schema_name
+    
+    # Window sizes to test
+    window_sizes = [5, 10, 15, 20, 25]  # Removed 1 to avoid numerical issues
+    
+    # Initialize storage for results
+    all_results = []
+    feature_importance_results = []
+    
+    # Get algorithms once
+    algorithms_template = create_algorithm_configs(schema)
+    
+    print(f"\nTesting {len(window_sizes)} window sizes with {len(algorithms_template)} algorithms")
+    print(f"Total evaluations: {len(window_sizes) * len(algorithms_template)}")
+    
+    # Run evaluation for each window size
+    for window_idx, window_size in enumerate(window_sizes):
+        print(f"\n{'='*60}")
+        print(f"Window Size: {window_size} ({window_idx+1}/{len(window_sizes)})")
+        print(f"{'='*60}")
+        
+        # Create dataset with current window size
+        try:
+            dataset = SchemaBasedTimeSeriesDataset(
+                data_path=data_path,
+                schema=schema,
+                sequence_length=window_size,
+                validate_data=False
+            )
+            
+            print(f"Dataset created: {len(dataset)} sequences")
+            
+            # Get fresh algorithms for this window (needed for models like DLinear that use seq_len)
+            algorithms = create_algorithm_configs(schema)
+            
+            # Update DLinear for current window size
+            if 'dlinear' in algorithms:
+                algorithms['dlinear']['model'] = DLinearWrapper(seq_len=window_size, kernel_size=3)
+            
+            # Add LSTM back to evaluation
+            algorithms['lstm'] = {
+                'model': PyTorchAdapter(
+                    SimpleLSTM(
+                        input_size=len(schema.feature_columns),
+                        hidden_size=64,
+                        num_layers=2,
+                        dropout=0.2
+                    ),
+                    schema=schema
+                ),
+                'description': 'LSTM with temporal modeling',
+                'category': 'neural',
+                'is_pytorch': True
+            }
+            
+            # Run evaluation for each algorithm
+            for algo_name, algo_config in algorithms.items():
+                print(f"  Evaluating {algo_name}...", end='', flush=True)
+                start_time = time.time()
+                
+                try:
+                    # Create adapter based on model type
+                    if algo_config.get('is_pytorch', False):
+                        model = algo_config['model']
+                        cv = CrossValidator(model, dataset)
+                        cv_results = cv.cross_validate(
+                            n_splits=5,
+                            test_size=1,
+                            epochs=30,  # Reduced for faster evaluation
+                            batch_size=32,
+                            early_stopping_patience=3,
+                            verbose=False
+                        )
+                    else:
+                        # Check if this is a mixed effects model
+                        if algo_config.get('requires_student_id', False):
+                            from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
+                            model = MixedEffectsSKLearnAdapter(
+                                mixed_effects_model=algo_config['model'],
+                                schema=schema,
+                                lag_window=window_size
+                            )
+                        else:
+                            model = SchemaBasedSKLearnAdapter(
+                                sklearn_model=algo_config['model'],
+                                schema=schema,
+                                lag_window=window_size
+                            )
+                        
+                        cv = CrossValidator(model, dataset)
+                        cv_results = cv.cross_validate(n_splits=5, test_size=1)
+                    
+                    # Calculate R² if predictions are available
+                    r2_mean = None
+                    if 'predictions' in cv_results and 'actuals' in cv_results:
+                        try:
+                            # Calculate R² for each fold
+                            r2_scores = []
+                            for pred, actual in zip(cv_results['predictions'], cv_results['actuals']):
+                                if len(pred) > 0 and len(actual) > 0:
+                                    r2 = r2_score(actual, pred)
+                                    r2_scores.append(r2)
+                            if r2_scores:
+                                r2_mean = np.mean(r2_scores)
+                        except:
+                            r2_mean = None
+                    
+                    # Store results
+                    result_entry = {
+                        'window_size': window_size,
+                        'model': algo_name,
+                        'category': algo_config['category'],
+                        'mae_mean': cv_results['mae_mean'],
+                        'mae_std': cv_results['mae_std'],
+                        'rmse_mean': cv_results['rmse_mean'],
+                        'rmse_std': cv_results['rmse_std'],
+                        'smape_mean': cv_results['smape_mean'],
+                        'smape_std': cv_results['smape_std'],
+                        'r2_mean': r2_mean,
+                        'training_time': time.time() - start_time,
+                        'description': algo_config['description']
+                    }
+                    
+                    # Extract feature importance if available
+                    if hasattr(algo_config['model'], 'feature_importances_'):
+                        try:
+                            importances = algo_config['model'].feature_importances_
+                            feature_names = model.get_feature_names() if hasattr(model, 'get_feature_names') else None
+                            
+                            if feature_names and len(feature_names) == len(importances):
+                                for feat_idx, (feat_name, importance) in enumerate(zip(feature_names, importances)):
+                                    feature_importance_results.append({
+                                        'window_size': window_size,
+                                        'model': algo_name,
+                                        'feature': feat_name,
+                                        'importance': importance,
+                                        'feature_rank': feat_idx
+                                    })
+                        except:
+                            pass
+                    
+                    all_results.append(result_entry)
+                    print(f" ✓ MAE={cv_results['mae_mean']:.3f}±{cv_results['mae_std']:.3f}")
+                    
+                except Exception as e:
+                    print(f" ✗ Failed: {str(e)}")
+                    
+        except Exception as e:
+            print(f"Failed to create dataset for window size {window_size}: {str(e)}")
+            continue
+    
+    # Convert to DataFrames
+    df_results = pd.DataFrame(all_results)
+    df_feature_importance = pd.DataFrame(feature_importance_results) if feature_importance_results else None
+    
+    # Analyze results
+    print("\n" + "=" * 80)
+    print("ANALYZING RESULTS")
+    print("=" * 80)
+    
+    # 1. Find optimal window size for each model
+    optimal_windows = df_results.groupby('model')['mae_mean'].idxmin()
+    df_optimal = df_results.loc[optimal_windows][['model', 'window_size', 'mae_mean']].rename(
+        columns={'window_size': 'optimal_window', 'mae_mean': 'optimal_mae'}
+    )
+    
+    # 2. Calculate consistency metrics (rank correlation between consecutive windows)
+    rank_correlations = []
+    for i in range(len(window_sizes) - 1):
+        w1, w2 = window_sizes[i], window_sizes[i+1]
+        df_w1 = df_results[df_results['window_size'] == w1].sort_values('mae_mean')
+        df_w2 = df_results[df_results['window_size'] == w2].sort_values('mae_mean')
+        
+        if len(df_w1) > 1 and len(df_w2) > 1:
+            # Get ranks
+            rank_w1 = {model: idx+1 for idx, model in enumerate(df_w1['model'])}
+            rank_w2 = {model: idx+1 for idx, model in enumerate(df_w2['model'])}
+            
+            # Calculate Spearman correlation
+            common_models = set(rank_w1.keys()) & set(rank_w2.keys())
+            if len(common_models) > 1:
+                ranks1 = [rank_w1[m] for m in common_models]
+                ranks2 = [rank_w2[m] for m in common_models]
+                corr, _ = stats.spearmanr(ranks1, ranks2)
+                rank_correlations.append(corr)
+    
+    avg_rank_correlation = np.mean(rank_correlations) if rank_correlations else 0
+    print(f"\nAverage rank correlation between consecutive windows: {avg_rank_correlation:.3f}")
+    
+    # 3. Learning curve analysis
+    learning_curves = {}
+    for model in df_results['model'].unique():
+        model_data = df_results[df_results['model'] == model].sort_values('window_size')
+        if len(model_data) > 5:
+            # Fit exponential decay: MAE = a * exp(-b * window) + c
+            from scipy.optimize import curve_fit
+            
+            def exp_decay(x, a, b, c):
+                return a * np.exp(-b * x) + c
+            
+            try:
+                x = model_data['window_size'].values
+                y = model_data['mae_mean'].values
+                popt, _ = curve_fit(exp_decay, x, y, p0=[1, 0.1, np.min(y)], maxfev=5000)
+                
+                # Calculate improvement rate
+                improvement_5_to_15 = (y[0] - y[10]) / y[0] if len(y) > 10 else 0
+                improvement_15_to_30 = (y[10] - y[-1]) / y[10] if len(y) > 10 else 0
+                
+                learning_curves[model] = {
+                    'decay_rate': popt[1],
+                    'asymptote': popt[2],
+                    'improvement_5_to_15': improvement_5_to_15,
+                    'improvement_15_to_30': improvement_15_to_30
+                }
+            except:
+                learning_curves[model] = {
+                    'decay_rate': 0,
+                    'asymptote': np.min(model_data['mae_mean']),
+                    'improvement_5_to_15': 0,
+                    'improvement_15_to_30': 0
+                }
+    
+    # 4. Stability analysis
+    stability_metrics = {}
+    for model in df_results['model'].unique():
+        model_data = df_results[df_results['model'] == model]
+        mae_values = model_data['mae_mean'].values
+        
+        # Coefficient of variation
+        cv = np.std(mae_values) / np.mean(mae_values) if np.mean(mae_values) > 0 else 0
+        
+        # Range normalized by mean
+        normalized_range = (np.max(mae_values) - np.min(mae_values)) / np.mean(mae_values)
+        
+        stability_metrics[model] = {
+            'cv': cv,
+            'normalized_range': normalized_range,
+            'mae_std_across_windows': np.std(mae_values)
+        }
+    
+    # Create summary DataFrames
+    df_window_summary = df_results.groupby('window_size').agg({
+        'mae_mean': ['min', 'max', 'mean', 'std']
+    }).round(3)
+    df_window_summary.columns = ['best_mae', 'worst_mae', 'avg_mae', 'mae_std']
+    
+    # Add best model for each window
+    best_models = df_results.groupby('window_size').apply(
+        lambda x: x.loc[x['mae_mean'].idxmin(), 'model']
+    )
+    df_window_summary['best_model'] = best_models
+    df_window_summary['mae_spread'] = df_window_summary['worst_mae'] - df_window_summary['best_mae']
+    df_window_summary['cv_across_models'] = df_window_summary['mae_std'] / df_window_summary['avg_mae']
+    
+    # Model consistency analysis
+    model_consistency = []
+    for model in df_results['model'].unique():
+        model_data = df_results[df_results['model'] == model]
+        
+        # Calculate average rank
+        ranks = []
+        for window in window_sizes:
+            window_data = df_results[df_results['window_size'] == window].sort_values('mae_mean')
+            if model in window_data['model'].values:
+                rank = window_data['model'].tolist().index(model) + 1
+                ranks.append(rank)
+        
+        if ranks:
+            optimal_data = df_optimal[df_optimal['model'] == model]
+            
+            consistency_entry = {
+                'model': model,
+                'avg_rank': np.mean(ranks),
+                'rank_std': np.std(ranks),
+                'times_top1': sum(r == 1 for r in ranks),
+                'times_top3': sum(r <= 3 for r in ranks),
+                'best_window': int(optimal_data['optimal_window'].values[0]) if len(optimal_data) > 0 else None,
+                'best_mae': float(optimal_data['optimal_mae'].values[0]) if len(optimal_data) > 0 else None,
+                'worst_window': int(model_data.loc[model_data['mae_mean'].idxmax(), 'window_size']),
+                'worst_mae': float(model_data['mae_mean'].max()),
+                'cv': stability_metrics[model]['cv'],
+                'learning_rate': learning_curves.get(model, {}).get('decay_rate', 0),
+                'asymptotic_mae': learning_curves.get(model, {}).get('asymptote', None)
+            }
+            model_consistency.append(consistency_entry)
+    
+    df_model_consistency = pd.DataFrame(model_consistency).sort_values('avg_rank')
+    
+    # Save results
+    output_dir = Path('experiments/outputs/window_analysis')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # Save CSVs
+    df_results.to_csv(output_dir / f'window_performance_detailed_{timestamp}.csv', index=False)
+    df_window_summary.to_csv(output_dir / f'window_performance_summary_{timestamp}.csv')
+    df_model_consistency.to_csv(output_dir / f'model_consistency_analysis_{timestamp}.csv', index=False)
+    
+    if df_feature_importance is not None and len(df_feature_importance) > 0:
+        df_feature_importance.to_csv(output_dir / f'feature_importance_{timestamp}.csv', index=False)
+    
+    # Create visualizations
+    create_window_analysis_plots(df_results, df_model_consistency, output_dir, timestamp)
+    
+    # Print summary
+    print("\n📊 WINDOW ANALYSIS SUMMARY")
+    print("=" * 60)
+    print(f"\n🏆 Best Overall Performance:")
+    best_overall = df_results.loc[df_results['mae_mean'].idxmin()]
+    print(f"  Model: {best_overall['model']}")
+    print(f"  Window Size: {best_overall['window_size']}")
+    print(f"  MAE: {best_overall['mae_mean']:.3f} ± {best_overall['mae_std']:.3f}")
+    
+    print(f"\n📈 Most Consistent Models (lowest rank std):")
+    for _, row in df_model_consistency.head(3).iterrows():
+        print(f"  {row['model']}: avg rank {row['avg_rank']:.1f} ± {row['rank_std']:.2f}")
+    
+    print(f"\n🎯 Optimal Window Sizes by Model:")
+    for _, row in df_model_consistency.head(5).iterrows():
+        print(f"  {row['model']}: window {row['best_window']} (MAE={row['best_mae']:.3f})")
+    
+    print(f"\n📁 Results saved to: {output_dir}")
+    
+    return df_results, df_model_consistency, df_window_summary
+
+
+def create_window_analysis_plots(df_results, df_model_consistency, output_dir, timestamp):
+    """Create visualizations for window size analysis."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    # 1. Bar plots for selected windows
+    selected_windows = [5, 10, 15, 20, 25]
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+    
+    for idx, window in enumerate(selected_windows):
+        ax = axes[idx]
+        window_data = df_results[df_results['window_size'] == window].sort_values('mae_mean')
+        
+        # Create bar plot
+        bars = ax.bar(range(len(window_data)), window_data['mae_mean'], 
+                      yerr=window_data['mae_std'], capsize=5, alpha=0.7)
+        
+        # Color by category
+        colors = {'baseline': 'blue', 'classical': 'green', 'ensemble': 'orange', 
+                 'neural': 'red', 'time_series': 'purple', 'mixed_effects': 'brown'}
+        for bar, cat in zip(bars, window_data['category']):
+            bar.set_color(colors.get(cat, 'gray'))
+        
+        ax.set_xticks(range(len(window_data)))
+        ax.set_xticklabels(window_data['model'], rotation=45, ha='right')
+        ax.set_ylabel('MAE')
+        ax.set_title(f'Window Size = {window}')
+        ax.grid(True, alpha=0.3)
+    
+    # Hide the last subplot since we only have 5 windows
+    axes[-1].set_visible(False)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / f'mae_by_window_{timestamp}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. Learning curves for all models
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    for model in df_results['model'].unique():
+        model_data = df_results[df_results['model'] == model].sort_values('window_size')
+        ax.plot(model_data['window_size'], model_data['mae_mean'], 
+               marker='o', label=model, alpha=0.7)
+    
+    ax.set_xlabel('Window Size (weeks)')
+    ax.set_ylabel('Mean Absolute Error (MAE)')
+    ax.set_title('Learning Curves: MAE vs Window Size')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / f'learning_curves_{timestamp}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 3. Heatmap of model rankings
+    # Create ranking matrix
+    models = df_results['model'].unique()
+    windows = sorted(df_results['window_size'].unique())
+    ranking_matrix = np.zeros((len(models), len(windows)))
+    
+    for j, window in enumerate(windows):
+        window_data = df_results[df_results['window_size'] == window].sort_values('mae_mean')
+        for i, model in enumerate(models):
+            if model in window_data['model'].values:
+                rank = window_data['model'].tolist().index(model) + 1
+                ranking_matrix[i, j] = rank
+            else:
+                ranking_matrix[i, j] = len(models) + 1  # Worst rank if missing
+    
+    # Plot heatmap
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    # Use custom colormap - lower ranks (better) are darker
+    cmap = plt.cm.RdYlGn_r  # Reversed so green is good (low rank)
+    im = ax.imshow(ranking_matrix, cmap=cmap, aspect='auto', vmin=1, vmax=len(models))
+    
+    ax.set_xticks(range(len(windows)))
+    ax.set_xticklabels([str(w) for w in windows])
+    ax.set_yticks(range(len(models)))
+    ax.set_yticklabels(models)
+    ax.set_xlabel('Window Size')
+    ax.set_ylabel('Model')
+    ax.set_title('Model Rankings Across Window Sizes (lower is better)')
+    
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Rank')
+    
+    # Add text annotations for top 3 models in each window
+    for j in range(len(windows)):
+        window_ranks = ranking_matrix[:, j]
+        top_3_indices = np.argsort(window_ranks)[:3]
+        for idx in top_3_indices:
+            if window_ranks[idx] <= 3:
+                ax.text(j, idx, f'{int(window_ranks[idx])}', 
+                       ha='center', va='center', color='white', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / f'ranking_heatmap_{timestamp}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 4. Stability vs Performance scatter plot
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Use model consistency data
+    scatter = ax.scatter(df_model_consistency['best_mae'], 
+                        df_model_consistency['cv'],
+                        s=100 + df_model_consistency['times_top3'] * 20,  # Size by consistency
+                        alpha=0.6)
+    
+    # Add labels
+    for _, row in df_model_consistency.iterrows():
+        ax.annotate(row['model'], 
+                   (row['best_mae'], row['cv']),
+                   xytext=(5, 5), textcoords='offset points',
+                   fontsize=8)
+    
+    ax.set_xlabel('Best MAE (lower is better)')
+    ax.set_ylabel('Coefficient of Variation (lower is more stable)')
+    ax.set_title('Model Performance vs Stability\n(bubble size = times in top 3)')
+    ax.grid(True, alpha=0.3)
+    
+    # Add quadrant lines
+    median_mae = df_model_consistency['best_mae'].median()
+    median_cv = df_model_consistency['cv'].median()
+    ax.axvline(median_mae, color='gray', linestyle='--', alpha=0.5)
+    ax.axhline(median_cv, color='gray', linestyle='--', alpha=0.5)
+    
+    # Label quadrants
+    ax.text(0.02, 0.98, 'Stable but\nPoor', transform=ax.transAxes, 
+            va='top', ha='left', alpha=0.5, fontsize=10)
+    ax.text(0.98, 0.98, 'Unstable and\nPoor', transform=ax.transAxes, 
+            va='top', ha='right', alpha=0.5, fontsize=10)
+    ax.text(0.02, 0.02, 'Stable and\nGood', transform=ax.transAxes, 
+            va='bottom', ha='left', alpha=0.5, fontsize=10, weight='bold')
+    ax.text(0.98, 0.02, 'Good but\nUnstable', transform=ax.transAxes, 
+            va='bottom', ha='right', alpha=0.5, fontsize=10)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / f'stability_vs_performance_{timestamp}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\n📊 Plots saved to {output_dir}/")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,8 @@ from .core import (
 from .adapters import (
     SKLearnAdapter,
     PyTorchAdapter,
-    SchemaBasedSKLearnAdapter
+    SchemaBasedSKLearnAdapter,
+    TrueMixedEffectsModel
 )
 
 from .models import (
@@ -68,6 +69,7 @@ __all__ = [
     'SKLearnAdapter',
     'PyTorchAdapter',
     'SchemaBasedSKLearnAdapter',
+    'TrueMixedEffectsModel',
     
     # Models
     'SimpleMLP',

@@ -280,17 +280,17 @@ if (USE_CACHED_MODEL && file_exists(model_path)) {
   cat("Number of skills:", n_distinct(d_afm$kc_sub_skills), "\n")
   cat("Week range:", min(d_afm$week_id), "to", max(d_afm$week_id), "\n\n")
   
-  m_afm <- glmer(
+m_afm <- glmer(
     outcome_bin ~ n_opportunity + (1 + n_opportunity | anon_student_id) + (1 | kc_sub_skills),
-    data = d_afm,
-    family = binomial,
-    nAGQ = 0,
+  data = d_afm,
+  family = binomial,
+  nAGQ = 0,
     verbose = 2,  # Show iteration progress (0=none, 1=minimal, 2=detailed)
-    control = glmerControl(
-      optimizer = "bobyqa",
-      calc.derivs = FALSE,
-      check.conv.grad = .makeCC("warning", tol = 1e-3, relTol = NULL),
-      check.conv.singular = .makeCC(action = "ignore", tol = 1e-3),
+  control = glmerControl(
+    optimizer = "bobyqa",
+    calc.derivs = FALSE,
+    check.conv.grad = .makeCC("warning", tol = 1e-3, relTol = NULL),
+    check.conv.singular = .makeCC(action = "ignore", tol = 1e-3),
       check.conv.hess = .makeCC(action = "ignore", tol = 1e-3),
       optCtrl = list(maxfun = 100000)  # Max iterations before giving up
     )
@@ -308,7 +308,7 @@ if (USE_CACHED_MODEL && file_exists(model_path)) {
 # Print model summary
 cat("\nModel summary:\n")
 print(summary(m_afm))
-``` 
+```
 
 # 6. extract parameters as latent features
 
@@ -567,7 +567,7 @@ if ("week_difficulty" %in% names(final_aggregation)) {
                       student_ability, student_learning_rate)))
 } else {
   cat("WARNING: week_difficulty not found in final_aggregation!\n")
-  print(summary(select(final_aggregation, minutes_per_week, problems_solved, 
+print(summary(select(final_aggregation, minutes_per_week, problems_solved, 
                       total_opportunities, avg_proficiency,
                       student_ability, student_learning_rate)))
 }

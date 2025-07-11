@@ -4,7 +4,7 @@ Goal-Based Prediction Algorithm
 
 A rule-based prediction algorithm that:
 1. For windows < 9: Uses random goal (0-60) and formula: prediction = goal + (performance - goal) * 0.5
-2. For windows >= 9: Predicts the 50th percentile (median) of the last 9 datapoints
+2. For windows >= 9: Predicts the specified percentile of the last 9 datapoints
 
 This algorithm is designed to work with the schema-based framework where
 the SKLearnAdapter creates engineered features from the time series windows.
@@ -20,7 +20,7 @@ class GoalBasedPredictor(BaseEstimator, RegressorMixin):
     
     The algorithm adapts based on the available window size:
     - If window < 9: Uses a random goal and adjusts based on last week's performance
-    - If window >= 9: Uses the median of the last 9 datapoints
+    - If window >= 9: Uses the specified percentile of the last 9 datapoints
     
     This version is designed to work with the SKLearnAdapter which creates
     engineered features from the time series data.
@@ -33,6 +33,8 @@ class GoalBasedPredictor(BaseEstimator, RegressorMixin):
         Maximum value for random goal generation
     adjustment_factor : float, default=0.5
         Factor for adjusting prediction based on performance-goal difference
+    prediction_percentile : float, default=50
+        Percentile to use for prediction when window >= 9 (0-100)
     random_state : int, optional
         Random seed for reproducibility
     """
@@ -41,10 +43,12 @@ class GoalBasedPredictor(BaseEstimator, RegressorMixin):
                  random_min=0,
                  random_max=60,
                  adjustment_factor=0.5,
+                 prediction_percentile=50,
                  random_state=None):
         self.random_min = random_min
         self.random_max = random_max
         self.adjustment_factor = adjustment_factor
+        self.prediction_percentile = prediction_percentile
         self.random_state = random_state
         
         # Feature metadata from adapter
@@ -182,14 +186,14 @@ class GoalBasedPredictor(BaseEstimator, RegressorMixin):
                     # No valid data - just use the random goal
                     predictions[i] = goal
             else:
-                # Case 2: Window >= 9 - use median of last 9 datapoints
+                # Case 2: Window >= 9 - use specified percentile of last 9 datapoints
                 
                 # Get the last 9 valid datapoints
                 last_9_points = valid_values[:9]  # Take first 9 (most recent)
                 
                 if last_9_points:
-                    # Calculate 50th percentile (median)
-                    predictions[i] = np.percentile(last_9_points, 50)
+                    # Calculate specified percentile
+                    predictions[i] = np.percentile(last_9_points, self.prediction_percentile)
                 else:
                     # Fallback to training median
                     predictions[i] = self.training_median_
@@ -198,4 +202,5 @@ class GoalBasedPredictor(BaseEstimator, RegressorMixin):
     
     def __str__(self):
         return (f"GoalBasedPredictor(random_range=[{self.random_min}, {self.random_max}], "
-                f"adjustment_factor={self.adjustment_factor})") 
+                f"adjustment_factor={self.adjustment_factor}, "
+                f"prediction_percentile={self.prediction_percentile})")

@@ -32,7 +32,7 @@ if (!dir.exists(AFM_DIR)) {
 
 ```{r}
 # Rolling window size (in weeks)
-ROLLING_WINDOW_SIZE <- as.numeric(Sys.getenv("ROLLING_WINDOW_SIZE", "10"))  # Use last 4 weeks of data for each model
+ROLLING_WINDOW_SIZE <- as.numeric(Sys.getenv("ROLLING_WINDOW_SIZE", "4"))  # Use last 4 weeks of data for each model
 
 # Control how duration is calculated
 USE_PROVIDED_DURATION <- TRUE  
@@ -341,7 +341,7 @@ fit_afm_for_group <- function(d_afm, group_name, afm_dir) {
       )
       
       # Calculate proficiency for students in current week only
-      current_week_data <- d_afm %>%
+      current_week_data <- window_data %>%
         filter(week_id == current_week)
       
       # Last opportunities for current week
@@ -522,10 +522,30 @@ extract_metrics <- function(successful_weeks, group_name) {
         week_id = character(), 
         week_difficulty = numeric()
       ),
-      student_abilities = tibble(),
-      skill_easiness = tibble(),
-      global_params = tibble(),
-      metadata = tibble()
+      student_abilities = tibble(
+        anon_student_id = character(),
+        ability_deviation = numeric(),
+        learning_rate_deviation = numeric(),
+        ability = numeric(),
+        learning_rate = numeric(),
+        week_id = character()
+      ),
+      skill_easiness = tibble(
+        kc_sub_skills = character(),
+        easiness = numeric(),
+        week_id = character()
+      ),
+      global_params = tibble(
+        week_id = character(),
+        global_intercept = numeric(),
+        global_learning_rate = numeric()
+      ),
+      metadata = tibble(
+        week_id = character(),
+        window_start = character(),
+        window_size = numeric(),
+        model_converged = logical()
+      )
     ))
   }
   
@@ -656,12 +676,31 @@ student_week_basic_70 <- d_with_week_id_70 %>%
     total_opportunities = n()
   )
 
-# Prepare student abilities for joining  
-student_abilities_for_join_30 <- metrics_30$student_abilities %>%
-  select(anon_student_id, week_id, student_ability = ability, student_learning_rate = learning_rate)
+# Prepare student abilities for joining
+# Handle empty dataframes (when no AFM models were fitted)
+if (nrow(metrics_30$student_abilities) > 0) {
+  student_abilities_for_join_30 <- metrics_30$student_abilities %>%
+    select(anon_student_id, week_id, student_ability = ability, student_learning_rate = learning_rate)
+} else {
+  student_abilities_for_join_30 <- tibble(
+    anon_student_id = character(),
+    week_id = character(),
+    student_ability = numeric(),
+    student_learning_rate = numeric()
+  )
+}
 
-student_abilities_for_join_70 <- metrics_70$student_abilities %>%
-  select(anon_student_id, week_id, student_ability = ability, student_learning_rate = learning_rate)
+if (nrow(metrics_70$student_abilities) > 0) {
+  student_abilities_for_join_70 <- metrics_70$student_abilities %>%
+    select(anon_student_id, week_id, student_ability = ability, student_learning_rate = learning_rate)
+} else {
+  student_abilities_for_join_70 <- tibble(
+    anon_student_id = character(),
+    week_id = character(),
+    student_ability = numeric(),
+    student_learning_rate = numeric()
+  )
+}
 
 # Create final aggregations for both groups
 final_aggregation_30 <- student_week_basic_30 %>%
@@ -790,11 +829,30 @@ cat("\nsteve_dang_70 summary:\n")
 print(summary(select(final_aggregation_70, all_of(summary_cols))))
 
 # Model convergence summary
-convergence_rate_30 <- mean(metrics_30$metadata$model_converged, na.rm = TRUE) * 100
-convergence_rate_70 <- mean(metrics_70$metadata$model_converged, na.rm = TRUE) * 100
+if (nrow(metrics_30$metadata) > 0) {
+  convergence_rate_30 <- mean(metrics_30$metadata$model_converged, na.rm = TRUE) * 100
+} else {
+  convergence_rate_30 <- NA
+}
+
+if (nrow(metrics_70$metadata) > 0) {
+  convergence_rate_70 <- mean(metrics_70$metadata$model_converged, na.rm = TRUE) * 100
+} else {
+  convergence_rate_70 <- NA
+}
+
 cat("\nModel convergence rates:\n")
-cat("  steve_dang_30:", round(convergence_rate_30, 1), "%\n")
-cat("  steve_dang_70:", round(convergence_rate_70, 1), "%\n")
+if (!is.na(convergence_rate_30)) {
+  cat("  steve_dang_30:", round(convergence_rate_30, 1), "%\n")
+} else {
+  cat("  steve_dang_30: No models fitted\n")
+}
+
+if (!is.na(convergence_rate_70)) {
+  cat("  steve_dang_70:", round(convergence_rate_70, 1), "%\n")
+} else {
+  cat("  steve_dang_70: No models fitted\n")
+}
 
 # Plot if in interactive mode
 if (interactive()) {

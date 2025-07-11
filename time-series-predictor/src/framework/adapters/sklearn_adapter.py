@@ -279,6 +279,8 @@ class SKLearnAdapter(TimeSeriesModel):
             if self.schema:
                 # Use ALL features with schema-based extraction
                 X_processed = self._create_all_features(X_all)
+                # Handle student ID for different model types
+                X_processed = self._handle_student_id_features(X_processed)
             else:
                 print("Create valid schema")
                     
@@ -465,6 +467,38 @@ class SKLearnAdapter(TimeSeriesModel):
         
         # 7. Combine all features
         X_processed = np.hstack(feature_list)
+        
+        return X_processed
+    
+    def _handle_student_id_features(self, X_processed: np.ndarray) -> np.ndarray:
+        """
+        Handle student ID features for different model types.
+        
+        For most sklearn models, we'll remove the raw student ID since they 
+        already have student-derived features (student_ability, student_learning_rate).
+        Mixed effects models will be handled by their special adapter.
+        """
+        if not self.schema or self.schema.student_id_strategy.strategy_type != 'universal':
+            return X_processed
+            
+        # Check if student ID is the first feature (for universal schema)
+        if (self.schema.feature_columns and 
+            self.schema.feature_columns[0] == self.schema.student_column):
+            
+            # For regular sklearn models, remove the student ID column
+            # since they already have student_ability and student_learning_rate
+            # which capture the important student-specific information
+            
+            # Check the model type
+            model_name = type(self.sklearn_model).__name__.lower()
+            
+            if any(term in model_name for term in ['mixed', 'hierarchical', 'multilevel']):
+                # Keep student ID for mixed effects models (though they use special adapters)
+                return X_processed
+            else:
+                # Remove student ID for regular sklearn models
+                # They already have student_ability and student_learning_rate
+                return X_processed[:, 1:]  # Remove first column (student ID)
         
         return X_processed
     

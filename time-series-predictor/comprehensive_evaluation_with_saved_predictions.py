@@ -28,9 +28,10 @@ from src.framework.core.base import CrossValidator, MetricsCalculator
 # Model imports
 from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, HuberRegressor
+from sklearn.neural_network import MLPRegressor
 
 # Framework models
-from src.framework.models.baselines import AveragePredictor, NaiveForecast, MedianPredictor, MedianPredictorNoZeros, MeanPredictorNoZeros
+from src.framework.models.baselines import MeanPredictor, NaiveForecast, MedianPredictor, MedianPredictorNoZeros, MeanPredictorNoZeros
 from src.framework.models.neural_nets import SimpleLSTM, create_model
 
 # Try to import optional dependencies
@@ -49,13 +50,25 @@ except ImportError:
     print("XGBoost not available")
 
 try:
-    from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
-    from src.framework.adapters.true_mixed_effects_adapter import TrueMixedEffectsModel
-    from src.framework.adapters.true_mixed_effects_sklearn_wrapper import TrueMixedEffectsSKLearnWrapper
+    from src.framework.adapters.mixed_effects_sklearn_adapter import SchemaAwareMixedEffectsAdapter
     HAS_MIXED_EFFECTS = True
 except ImportError:
     HAS_MIXED_EFFECTS = False
     print("Mixed effects models not available")
+
+
+def convert_numpy(obj):
+    """Convert numpy types to Python types for JSON serialization."""
+    if isinstance(obj, (np.integer, np.floating, np.float32, np.float64, np.int32, np.int64)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.astype(float).tolist()
+    elif isinstance(obj, list):
+        return [convert_numpy(x) for x in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_numpy(v) for k, v in obj.items()}
+    else:
+        return obj
 
 
 class PredictionSaver:
@@ -63,7 +76,7 @@ class PredictionSaver:
     
     def __init__(self, output_dir: str = "evaluation_outputs"):
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
     def save_fold_predictions(self, model_name: str, fold_idx: int, 
@@ -73,10 +86,10 @@ class PredictionSaver:
         fold_data = {
             'model_name': model_name,
             'fold_idx': fold_idx,
-            'y_true': y_true.tolist(),
-            'y_pred': y_pred.tolist(),
+            'y_true': convert_numpy(y_true),
+            'y_pred': convert_numpy(y_pred),
             'indices': indices,
-            'metadata': metadata or {}
+            'metadata': convert_numpy(metadata or {})
         }
         
         # Save to model-specific directory
@@ -90,16 +103,28 @@ class PredictionSaver:
     def save_model_summary(self, model_name: str, cv_results: Dict[str, Any], 
                          model_config: Dict[str, Any], training_time: float):
         """Save overall model results and configuration."""
+        # Create serializable version of model_config
+        serializable_config = {}
+        for key, value in model_config.items():
+            if key == 'model':
+                # Store model type name instead of the object
+                if value is not None:
+                    serializable_config[key] = type(value).__name__
+                else:
+                    serializable_config[key] = None
+            else:
+                serializable_config[key] = convert_numpy(value)
+        
         summary = {
             'model_name': model_name,
             'timestamp': self.timestamp,
-            'cv_results': cv_results,
-            'model_config': model_config,
+            'cv_results': convert_numpy(cv_results),
+            'model_config': serializable_config,
             'training_time': training_time
         }
         
         model_dir = self.output_dir / model_name
-        model_dir.mkdir(exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
         
         with open(model_dir / 'summary.json', 'w') as f:
             json.dump(summary, f, indent=2)
@@ -107,7 +132,7 @@ class PredictionSaver:
     def save_evaluation_config(self, config: Dict[str, Any]):
         """Save the overall evaluation configuration."""
         with open(self.output_dir / 'evaluation_config.json', 'w') as f:
-            json.dump(config, f, indent=2)
+            json.dump(convert_numpy(config), f, indent=2)
 
 
 class ExtendedCrossValidator(CrossValidator):
@@ -156,7 +181,7 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
     
     # 1. Trivial Baselines
     models['average_all'] = {
-        'model': AveragePredictor(),
+        'model': MeanPredictor(),
         'category': 'baseline',
         'description': 'Simple average of all training values'
     }
@@ -187,10 +212,22 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
     
     # 2. Goal-based predictors (if available)
     if HAS_GOAL_BASED:
-        models['goal_based_50'] = {
-            'model': GoalBasedPredictor(adjustment_factor=0.5, random_state=42),
+        models['adams_baseline_50'] = {
+            'model': GoalBasedPredictor(prediction_percentile=50, adjustment_factor=0.5, random_state=42),
             'category': 'goal_based',
-            'description': 'Adam\'s method with 50th percentile'
+            'description': 'Goal-based predictor with 50th percentile'
+        }
+        
+        models['adams_baseline_60'] = {
+            'model': GoalBasedPredictor(prediction_percentile=60, adjustment_factor=0.5, random_state=42),
+            'category': 'goal_based',
+            'description': 'Goal-based predictor with 60th percentile'
+        }
+        
+        models['adams_baseline_70'] = {
+            'model': GoalBasedPredictor(prediction_percentile=70, adjustment_factor=0.5, random_state=42),
+            'category': 'goal_based',
+            'description': 'Goal-based predictor with 70th percentile'
         }
     
     # 3. Linear Models
@@ -207,7 +244,7 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
     }
     
     models['lasso'] = {
-        'model': Lasso(alpha=0.1, max_iter=2000),
+        'model': Lasso(alpha=0.1, max_iter=5000),
         'category': 'linear',
         'description': 'Lasso regression (L1 regularization)'
     }
@@ -237,15 +274,42 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
             'description': 'XGBoost with tuned hyperparameters'
         }
     
-    # 6. Mixed Effects Models (if available)
+    # 6. Neural Network Models
+    models['mlp'] = {
+        'model': MLPRegressor(
+            hidden_layer_sizes=(64, 32),
+            activation='relu',
+            solver='adam',
+            alpha=0.01,
+            learning_rate_init=0.001,
+            max_iter=500,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=10,
+            random_state=42
+        ),
+        'category': 'neural',
+        'description': 'Multi-Layer Perceptron'
+    }
+    
+    models['lstm'] = {
+        'model': None,  # Will be created during evaluation with correct input size
+        'category': 'neural',
+        'description': 'LSTM with temporal modeling',
+        'is_pytorch': True,
+        'lstm_config': {
+            'hidden_size': 64,
+            'num_layers': 2,
+            'dropout': 0.2
+        }
+    }
+    
+    # 7. Mixed Effects Models (if available)
     if HAS_MIXED_EFFECTS:
-        models['mixed_effects_wrapper'] = {
-            'model': TrueMixedEffectsSKLearnWrapper(
-                target_col='minutes_per_week',
-                n_lags=5
-            ),
+        models['mixed_effects'] = {
+            'model': None,  # SchemaAwareMixedEffectsAdapter is both model and adapter
             'category': 'mixed_effects',
-            'description': 'Simplified mixed effects with student effects',
+            'description': 'Schema-aware mixed effects with student effects',
             'requires_student_id': True
         }
     
@@ -324,14 +388,31 @@ def run_evaluation_with_predictions(
             if model_config.get('requires_student_id', False):
                 # Mixed effects model
                 if HAS_MIXED_EFFECTS:
-                    adapter = MixedEffectsSKLearnAdapter(
-                        mixed_effects_model=model_config['model'],
+                    adapter = SchemaAwareMixedEffectsAdapter(
+                        sklearn_model=None,  # Not used
                         schema=schema,
-                        lag_window=window_size
+                        lag_window=window_size,
+                        target_col='minutes_per_week'
                     )
                 else:
                     print("❌ Mixed effects not available, skipping...")
                     continue
+            elif model_config.get('is_pytorch', False):
+                # PyTorch model (LSTM) - create dynamically with correct input size
+                if model_name == 'lstm':
+                    lstm_config = model_config['lstm_config']
+                    lstm_model = SimpleLSTM(
+                        input_size=len(schema.feature_columns),
+                        hidden_size=lstm_config['hidden_size'],
+                        num_layers=lstm_config['num_layers'],
+                        dropout=lstm_config['dropout']
+                    )
+                    adapter = PyTorchAdapter(lstm_model, schema=schema)
+                else:
+                    # Other PyTorch models
+                    model = model_config['model']
+                    model.schema = schema
+                    adapter = model
             else:
                 # Standard sklearn model
                 adapter = SchemaBasedSKLearnAdapter(
@@ -347,11 +428,23 @@ def run_evaluation_with_predictions(
                 model_name=model_name
             )
             
-            # Run cross-validation
-            cv_results = cv.cross_validate(
-                n_splits=evaluation_config['n_splits'],
-                test_size=evaluation_config['test_size']
-            )
+            # Run cross-validation with appropriate parameters
+            if model_config.get('is_pytorch', False):
+                # PyTorch models need different training parameters
+                cv_results = cv.cross_validate(
+                    n_splits=evaluation_config['n_splits'],
+                    test_size=evaluation_config['test_size'],
+                    epochs=50,
+                    batch_size=32,
+                    early_stopping_patience=5,
+                    verbose=False
+                )
+            else:
+                # Standard models
+                cv_results = cv.cross_validate(
+                    n_splits=evaluation_config['n_splits'],
+                    test_size=evaluation_config['test_size']
+                )
             
             # Calculate training time
             training_time = time.time() - start_time
@@ -383,7 +476,7 @@ def run_evaluation_with_predictions(
     
     results_file = saver.output_dir / 'overall_results.json'
     with open(results_file, 'w') as f:
-        json.dump(overall_results, f, indent=2)
+        json.dump(convert_numpy(overall_results), f, indent=2)
     
     print(f"\n{'='*80}")
     print("EVALUATION COMPLETE")

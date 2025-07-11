@@ -34,10 +34,7 @@ from src.framework.core.base import CrossValidator, MetricsCalculator
 
 # Mixed effects imports (optional)
 try:
-    from src.framework.adapters.mixed_effects_sklearn_adapter import (
-        MixedEffectsSKLearnWrapper,
-        MixedEffectsSKLearnAdapter
-    )
+    from src.framework.adapters.mixed_effects_sklearn_adapter import SchemaAwareMixedEffectsAdapter
     HAS_MIXED_EFFECTS = True
 except ImportError:
     HAS_MIXED_EFFECTS = False
@@ -51,7 +48,7 @@ from sklearn.dummy import DummyRegressor
 from sklearn.neural_network import MLPRegressor
 
 # Import existing baseline models from our framework
-from src.framework.models.baselines import AveragePredictor, NaiveForecast, LinearTrend, DLinearWrapper
+from src.framework.models.baselines import NaiveForecast, LinearTrend, DLinearWrapper
 from src.framework.models.neural_nets import SimpleLSTM
 from src.framework.adapters.pytorch_adapter import PyTorchAdapter
 
@@ -476,11 +473,11 @@ def run_comprehensive_evaluation(schema_name=None):
                 # Check if this is a mixed effects model
                 if algo_config.get('requires_student_id', False):
                     # Mixed effects model - needs special adapter
-                    from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
-                    model = MixedEffectsSKLearnAdapter(
-                        mixed_effects_model=algo_config['model'],
+                    model = SchemaAwareMixedEffectsAdapter(
+                        sklearn_model=None,  # Not used
                         schema=schema,
-                        lag_window=evaluation_config['sequence_length']
+                        lag_window=evaluation_config['sequence_length'],
+                        target_col=schema.target_column
                     )
                 else:
                     # Create schema-based adapter for sklearn models
@@ -779,11 +776,11 @@ def run_window_size_analysis(schema_name=None):
                     else:
                         # Check if this is a mixed effects model
                         if algo_config.get('requires_student_id', False):
-                            from src.framework.adapters.mixed_effects_sklearn_adapter import MixedEffectsSKLearnAdapter
-                            model = MixedEffectsSKLearnAdapter(
-                                mixed_effects_model=algo_config['model'],
+                            model = SchemaAwareMixedEffectsAdapter(
+                                sklearn_model=None,  # Not used
                                 schema=schema,
-                                lag_window=window_size
+                                lag_window=window_size,
+                                target_col=schema.target_column
                             )
                         else:
                             model = SchemaBasedSKLearnAdapter(

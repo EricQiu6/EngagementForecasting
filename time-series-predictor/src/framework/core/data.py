@@ -46,6 +46,13 @@ class SchemaBasedTimeSeriesDataset(Dataset):
         if self.load_in_memory:
             self.data = pd.read_csv(data_path)
             
+            # Apply student ID strategy to generate additional features
+            if self.schema.student_id_strategy.strategy_type != 'none':
+                print(f"Applying student ID strategy: {self.schema.student_id_strategy.strategy_type}")
+                self.data = self.schema.student_id_strategy.get_additional_features(
+                    self.data, self.schema.student_column, self.schema.target_column
+                )
+            
             # Validate if requested
             if validate_data:
                 is_valid, issues = self.validator.validate_dataset(self.data)

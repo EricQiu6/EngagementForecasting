@@ -19,8 +19,8 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
 ```{r}
 DATA_PATH    <- "All_Data_1884_2013_0215_193821.csv"
-AFM_DIR      <- "afm_outputs_rolling_new"
-OUTPUT_FILE  <- "student_week_aggregations_rolling_new.csv"
+AFM_DIR      <- "afm_outputs_steve_dang_100"
+OUTPUT_FILE  <- "steve_dang_100.csv"
 
 # Create output directory if it doesn't exist
 if (!dir.exists(AFM_DIR)) {
@@ -32,7 +32,7 @@ if (!dir.exists(AFM_DIR)) {
 
 ```{r}
 # Rolling window size (in weeks)
-ROLLING_WINDOW_SIZE <- as.numeric(Sys.getenv("ROLLING_WINDOW_SIZE", "4"))  # Use last 4 weeks of data for each model
+ROLLING_WINDOW_SIZE <- as.numeric(Sys.getenv("ROLLING_WINDOW_SIZE", "5"))  # Use last 4 weeks of data for each model
 
 # Control how duration is calculated
 USE_PROVIDED_DURATION <- TRUE  
@@ -41,7 +41,7 @@ USE_PROVIDED_DURATION <- TRUE
 PROFICIENCY_METHOD <- Sys.getenv("PROFICIENCY_METHOD", "new_skills_mastered")
 
 # Sample a percentage of students (set to 100 to use all students)
-STUDENT_SAMPLE_PERCENT <- as.numeric(Sys.getenv("STUDENT_SAMPLE_PERCENT", "30"))
+STUDENT_SAMPLE_PERCENT <- as.numeric(Sys.getenv("STUDENT_SAMPLE_PERCENT", "100"))
 STUDENT_SAMPLE_SEED <- 42      
 
 # Outlier removal for durations

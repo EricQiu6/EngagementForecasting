@@ -52,6 +52,108 @@ class ColumnSchema:
             return False, f"Unknown dtype '{self.dtype}' for column '{self.name}'"
 
 
+class StudentIDStrategy:
+    """Defines how to incorporate student ID as a feature."""
+    
+    def __init__(self, strategy_type: str = 'none', **kwargs):
+        """
+        Args:
+            strategy_type: 'none', 'onehot', 'target_encoding', 'embeddings', 'mixed_effects'
+            **kwargs: Strategy-specific parameters
+        """
+        self.strategy_type = strategy_type
+        self.params = kwargs
+        
+    def get_additional_features(self, df: pd.DataFrame, student_column: str, target_column: str) -> pd.DataFrame:
+        """
+        Generate additional features based on student ID strategy.
+        
+        Args:
+            df: Input dataframe
+            student_column: Name of student ID column
+            target_column: Name of target column
+            
+        Returns:
+            DataFrame with additional student-based features
+        """
+        if self.strategy_type == 'none':
+            return df
+            
+        elif self.strategy_type == 'onehot':
+            # One-hot encode student IDs
+            student_dummies = pd.get_dummies(df[student_column], prefix='student')
+            return pd.concat([df, student_dummies], axis=1)
+            
+        elif self.strategy_type == 'target_encoding':
+            # Add student-specific statistics
+            return self._add_target_encoding_features(df, student_column, target_column)
+            
+        elif self.strategy_type == 'embeddings':
+            # For neural networks - just add student ID as integer
+            student_mapping = {student: idx for idx, student in enumerate(df[student_column].unique())}
+            df['student_id_numeric'] = df[student_column].map(student_mapping)
+            return df
+            
+        elif self.strategy_type == 'mixed_effects':
+            # Mixed effects models handle this internally
+            return df
+            
+        elif self.strategy_type == 'universal':
+            # Universal approach: student ID is already in feature columns
+            # Different adapters will handle it appropriately
+            return df
+            
+        else:
+            raise ValueError(f"Unknown strategy type: {self.strategy_type}")
+    
+    def _add_target_encoding_features(self, df: pd.DataFrame, student_column: str, target_column: str) -> pd.DataFrame:
+        """Add target encoding features for students."""
+        # Calculate student-specific statistics
+        student_stats = df.groupby(student_column)[target_column].agg([
+            'mean', 'std', 'count', 'median'
+        ]).reset_index()
+        student_stats.columns = [student_column, 'student_target_mean', 'student_target_std', 
+                               'student_target_count', 'student_target_median']
+        
+        # Handle NaN values
+        student_stats['student_target_std'] = student_stats['student_target_std'].fillna(0)
+        
+        # Add global statistics for new students
+        global_mean = df[target_column].mean()
+        global_std = df[target_column].std()
+        
+        student_stats['student_target_mean'] = student_stats['student_target_mean'].fillna(global_mean)
+        student_stats['student_target_std'] = student_stats['student_target_std'].fillna(global_std)
+        
+        # Merge back to original dataframe
+        df_with_stats = df.merge(student_stats, on=student_column, how='left')
+        
+        # Add additional derived features
+        df_with_stats['student_target_deviation'] = (
+            df_with_stats[target_column] - df_with_stats['student_target_mean']
+        )
+        
+        return df_with_stats
+    
+    def get_additional_feature_columns(self, df: pd.DataFrame, student_column: str) -> List[str]:
+        """Get list of additional feature column names this strategy will create."""
+        if self.strategy_type == 'none':
+            return []
+        elif self.strategy_type == 'onehot':
+            return [f'student_{student}' for student in df[student_column].unique()]
+        elif self.strategy_type == 'target_encoding':
+            return ['student_target_mean', 'student_target_std', 'student_target_count', 
+                   'student_target_median', 'student_target_deviation']
+        elif self.strategy_type == 'embeddings':
+            return ['student_id_numeric']
+        elif self.strategy_type == 'mixed_effects':
+            return []
+        elif self.strategy_type == 'universal':
+            return []  # Student ID is already in the feature columns
+        else:
+            return []
+
+
 @dataclass
 class DataSchema:
     """Complete schema definition for time series data."""
@@ -63,6 +165,9 @@ class DataSchema:
     
     # Column schemas
     columns: Dict[str, ColumnSchema] = field(default_factory=dict)
+    
+    # Student ID integration strategy
+    student_id_strategy: StudentIDStrategy = field(default_factory=lambda: StudentIDStrategy('none'))
     
     # Additional configuration
     time_format: Optional[str] = None  # e.g., '%Y-W%W' for week strings
@@ -389,6 +494,69 @@ SCHEMAS = {
             'total_opportunities', 'n_skills_measured', 'week_difficulty',
             'student_ability', 'student_learning_rate', 'minutes_per_week'
         ],
+        time_format='week_string',
+        validation_rules={
+            'minutes_per_week': {'min': 0.0},
+            'avg_proficiency': {'min': 0.0, 'max': 1.0},
+            'student_ability': {'min': 0.0, 'max': 1.0},
+            'week_difficulty': {'min': 0.0, 'max': 1.0}
+        }
+    ),
+    
+    # Schema variants with different student ID strategies
+    'time_goal_extended_target_encoding': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='minutes_per_week',
+        feature_columns=[
+            'week_id', 'avg_proficiency', 'problems_solved',
+            'total_opportunities', 'n_skills_measured', 'week_difficulty',
+            'student_ability', 'student_learning_rate', 'minutes_per_week',
+            'student_target_mean', 'student_target_std', 'student_target_count',
+            'student_target_median', 'student_target_deviation'
+        ],
+        student_id_strategy=StudentIDStrategy('target_encoding'),
+        time_format='week_string',
+        validation_rules={
+            'minutes_per_week': {'min': 0.0},
+            'avg_proficiency': {'min': 0.0, 'max': 1.0},
+            'student_ability': {'min': 0.0, 'max': 1.0},
+            'week_difficulty': {'min': 0.0, 'max': 1.0}
+        }
+    ),
+    
+    'time_goal_extended_embeddings': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='minutes_per_week',
+        feature_columns=[
+            'week_id', 'avg_proficiency', 'problems_solved',
+            'total_opportunities', 'n_skills_measured', 'week_difficulty',
+            'student_ability', 'student_learning_rate', 'minutes_per_week',
+            'student_id_numeric'
+        ],
+        student_id_strategy=StudentIDStrategy('embeddings'),
+        time_format='week_string',
+        validation_rules={
+            'minutes_per_week': {'min': 0.0},
+            'avg_proficiency': {'min': 0.0, 'max': 1.0},
+            'student_ability': {'min': 0.0, 'max': 1.0},
+            'week_difficulty': {'min': 0.0, 'max': 1.0}
+        }
+    ),
+    
+    # Universal schema that works with ALL model types including mixed effects
+    'time_goal_extended_universal': DataSchema(
+        student_column='anon_student_id',
+        time_column='week_id',
+        target_column='minutes_per_week',
+        feature_columns=[
+            'anon_student_id',  # FIRST for mixed effects compatibility
+            'week_id', 'avg_proficiency', 'problems_solved',
+            'total_opportunities', 'n_skills_measured', 'week_difficulty',
+            'student_ability', 'student_learning_rate', 'minutes_per_week'
+        ],
+        student_id_strategy=StudentIDStrategy('universal'),
         time_format='week_string',
         validation_rules={
             'minutes_per_week': {'min': 0.0},

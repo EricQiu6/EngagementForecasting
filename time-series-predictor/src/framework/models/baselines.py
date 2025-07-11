@@ -345,4 +345,324 @@ class LinearTrend:
     
     def get_params(self, deep=True):
         """For sklearn compatibility"""
-        return {} 
+        return {}
+
+
+class MedianPredictor:
+    """
+    Median baseline that predicts the median of past target values.
+    Compatible with SKLearnAdapter.
+    """
+    
+    def __init__(self):
+        self.global_median = None
+        self.metadata = None
+        
+    def set_feature_metadata(self, metadata):
+        """Receive feature metadata from adapter."""
+        self.metadata = metadata
+        
+    def fit(self, X, y):
+        """
+        Store global median as fallback.
+        """
+        if len(y) > 0:
+            self.global_median = np.median(y)
+        else:
+            self.global_median = 0.0
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using median of past target values from each sequence.
+        """
+        if self.global_median is None:
+            raise ValueError("Must fit before predicting")
+            
+        n_samples = len(X)
+        predictions = np.zeros(n_samples)
+        
+        # Get lag feature indices from metadata
+        lag_indices = self._get_lag_indices()
+        
+        for i in range(n_samples):
+            if lag_indices and all(idx < X.shape[1] for idx in lag_indices):
+                # Extract lag values (historical sequence)
+                lag_values = np.array([X[i, idx] for idx in lag_indices])
+                
+                # Use all values (including zeros)
+                valid_values = lag_values[lag_values >= 0]  # Only filter out negative values
+                
+                if len(valid_values) > 0:
+                    predictions[i] = np.median(valid_values)
+                else:
+                    predictions[i] = self.global_median
+            else:
+                predictions[i] = self.global_median
+                
+        return predictions
+    
+    def _get_lag_indices(self):
+        """Get indices of lag features from metadata."""
+        lag_indices = []
+        if self.metadata and 'feature_index_map' in self.metadata:
+            target_name = self.metadata['target_name']
+            feature_map = self.metadata['feature_index_map']
+            
+            # Get all lag features for the target in order
+            for lag in range(1, 6):  # lag1 to lag5
+                for possible_name in [f'{target_name}_lag{lag}', f'target_lag{lag}', f'minutes_per_week_lag{lag}']:
+                    if possible_name in feature_map:
+                        lag_indices.append(feature_map[possible_name])
+                        break
+        
+        if not lag_indices:
+            # Fallback: assume lags are in positions 9-13
+            lag_indices = list(range(9, 14))
+            
+        return lag_indices
+    
+    def get_params(self, deep=True):
+        """For sklearn compatibility"""
+        return {}
+
+
+class MedianWithoutZeroPredictor:
+    """
+    Median baseline that predicts the median of past target values, ignoring zeros.
+    Outputs 0 if no non-zero past target values are available.
+    Compatible with SKLearnAdapter.
+    """
+    
+    def __init__(self):
+        self.global_median = None
+        self.metadata = None
+        
+    def set_feature_metadata(self, metadata):
+        """Receive feature metadata from adapter."""
+        self.metadata = metadata
+        
+    def fit(self, X, y):
+        """
+        Store global median of non-zero values as fallback.
+        """
+        if len(y) > 0:
+            non_zero_y = y[y > 0]
+            self.global_median = np.median(non_zero_y) if len(non_zero_y) > 0 else 0.0
+        else:
+            self.global_median = 0.0
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using median of non-zero past target values from each sequence.
+        """
+        if self.global_median is None:
+            raise ValueError("Must fit before predicting")
+            
+        n_samples = len(X)
+        predictions = np.zeros(n_samples)
+        
+        # Get lag feature indices from metadata
+        lag_indices = self._get_lag_indices()
+        
+        for i in range(n_samples):
+            if lag_indices and all(idx < X.shape[1] for idx in lag_indices):
+                # Extract lag values (historical sequence)
+                lag_values = np.array([X[i, idx] for idx in lag_indices])
+                
+                # Filter out zero values
+                non_zero_values = lag_values[lag_values > 0]
+                
+                if len(non_zero_values) > 0:
+                    predictions[i] = np.median(non_zero_values)
+                else:
+                    predictions[i] = 0.0  # Output 0 if no non-zero past values
+            else:
+                predictions[i] = 0.0
+                
+        return predictions
+    
+    def _get_lag_indices(self):
+        """Get indices of lag features from metadata."""
+        lag_indices = []
+        if self.metadata and 'feature_index_map' in self.metadata:
+            target_name = self.metadata['target_name']
+            feature_map = self.metadata['feature_index_map']
+            
+            # Get all lag features for the target in order
+            for lag in range(1, 6):  # lag1 to lag5
+                for possible_name in [f'{target_name}_lag{lag}', f'target_lag{lag}', f'minutes_per_week_lag{lag}']:
+                    if possible_name in feature_map:
+                        lag_indices.append(feature_map[possible_name])
+                        break
+        
+        if not lag_indices:
+            # Fallback: assume lags are in positions 9-13
+            lag_indices = list(range(9, 14))
+            
+        return lag_indices
+    
+    def get_params(self, deep=True):
+        """For sklearn compatibility"""
+        return {}
+
+
+class MeanPredictor:
+    """
+    Mean baseline that predicts the mean of past target values.
+    Compatible with SKLearnAdapter.
+    """
+    
+    def __init__(self):
+        self.global_mean = None
+        self.metadata = None
+        
+    def set_feature_metadata(self, metadata):
+        """Receive feature metadata from adapter."""
+        self.metadata = metadata
+        
+    def fit(self, X, y):
+        """
+        Store global mean as fallback.
+        """
+        if len(y) > 0:
+            self.global_mean = np.mean(y)
+        else:
+            self.global_mean = 0.0
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using mean of past target values from each sequence.
+        """
+        if self.global_mean is None:
+            raise ValueError("Must fit before predicting")
+            
+        n_samples = len(X)
+        predictions = np.zeros(n_samples)
+        
+        # Get lag feature indices from metadata
+        lag_indices = self._get_lag_indices()
+        
+        for i in range(n_samples):
+            if lag_indices and all(idx < X.shape[1] for idx in lag_indices):
+                # Extract lag values (historical sequence)
+                lag_values = np.array([X[i, idx] for idx in lag_indices])
+                
+                # Use all values (including zeros)
+                valid_values = lag_values[lag_values >= 0]  # Only filter out negative values
+                
+                if len(valid_values) > 0:
+                    predictions[i] = np.mean(valid_values)
+                else:
+                    predictions[i] = self.global_mean
+            else:
+                predictions[i] = self.global_mean
+                
+        return predictions
+    
+    def _get_lag_indices(self):
+        """Get indices of lag features from metadata."""
+        lag_indices = []
+        if self.metadata and 'feature_index_map' in self.metadata:
+            target_name = self.metadata['target_name']
+            feature_map = self.metadata['feature_index_map']
+            
+            # Get all lag features for the target in order
+            for lag in range(1, 6):  # lag1 to lag5
+                for possible_name in [f'{target_name}_lag{lag}', f'target_lag{lag}', f'minutes_per_week_lag{lag}']:
+                    if possible_name in feature_map:
+                        lag_indices.append(feature_map[possible_name])
+                        break
+        
+        if not lag_indices:
+            # Fallback: assume lags are in positions 9-13
+            lag_indices = list(range(9, 14))
+            
+        return lag_indices
+    
+    def get_params(self, deep=True):
+        """For sklearn compatibility"""
+        return {}
+
+
+class MeanWithoutZeroPredictor:
+    """
+    Mean baseline that predicts the mean of past target values, ignoring zeros.
+    Outputs 0 if no non-zero past target values are available.
+    Compatible with SKLearnAdapter.
+    """
+    
+    def __init__(self):
+        self.global_mean = None
+        self.metadata = None
+        
+    def set_feature_metadata(self, metadata):
+        """Receive feature metadata from adapter."""
+        self.metadata = metadata
+        
+    def fit(self, X, y):
+        """
+        Store global mean of non-zero values as fallback.
+        """
+        if len(y) > 0:
+            non_zero_y = y[y > 0]
+            self.global_mean = np.mean(non_zero_y) if len(non_zero_y) > 0 else 0.0
+        else:
+            self.global_mean = 0.0
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using mean of non-zero past target values from each sequence.
+        """
+        if self.global_mean is None:
+            raise ValueError("Must fit before predicting")
+            
+        n_samples = len(X)
+        predictions = np.zeros(n_samples)
+        
+        # Get lag feature indices from metadata
+        lag_indices = self._get_lag_indices()
+        
+        for i in range(n_samples):
+            if lag_indices and all(idx < X.shape[1] for idx in lag_indices):
+                # Extract lag values (historical sequence)
+                lag_values = np.array([X[i, idx] for idx in lag_indices])
+                
+                # Filter out zero values
+                non_zero_values = lag_values[lag_values > 0]
+                
+                if len(non_zero_values) > 0:
+                    predictions[i] = np.mean(non_zero_values)
+                else:
+                    predictions[i] = 0.0  # Output 0 if no non-zero past values
+            else:
+                predictions[i] = 0.0
+                
+        return predictions
+    
+    def _get_lag_indices(self):
+        """Get indices of lag features from metadata."""
+        lag_indices = []
+        if self.metadata and 'feature_index_map' in self.metadata:
+            target_name = self.metadata['target_name']
+            feature_map = self.metadata['feature_index_map']
+            
+            # Get all lag features for the target in order
+            for lag in range(1, 6):  # lag1 to lag5
+                for possible_name in [f'{target_name}_lag{lag}', f'target_lag{lag}', f'minutes_per_week_lag{lag}']:
+                    if possible_name in feature_map:
+                        lag_indices.append(feature_map[possible_name])
+                        break
+        
+        if not lag_indices:
+            # Fallback: assume lags are in positions 9-13
+            lag_indices = list(range(9, 14))
+            
+        return lag_indices
+    
+    def get_params(self, deep=True):
+        """For sklearn compatibility"""
+        return {}

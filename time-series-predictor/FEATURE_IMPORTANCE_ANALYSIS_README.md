@@ -1,8 +1,11 @@
-# Enhanced Feature Importance Analysis
+# Enhanced Comprehensive Analysis
 
 ## Overview
 
-The `comprehensive_evaluation_analysis.py` script has been enhanced with comprehensive feature importance analysis capabilities that focus on identifying the most important features for each model, with special attention to three key student modeling features.
+The `comprehensive_evaluation_analysis.py` script has been enhanced with comprehensive analysis capabilities including:
+
+1. **Feature Importance Analysis** - Focus on top 5 features and key student modeling features
+2. **Window and Architecture Analysis** - Aggregate performance by window size and architecture with statistical significance testing
 
 ## Key Features
 
@@ -56,6 +59,49 @@ The analysis specifically highlights and analyzes these three critical features:
 - **Coefficient of variation** for consistency
 - **Model count** (how many models use each feature)
 - **Min/max importance** values
+
+## 🏗️ Window and Architecture Analysis
+
+### 🎯 Aggregate Performance Analysis
+- **Aggregates average rank and MAE by window size** across all models
+- **Aggregates average rank and MAE by architecture** (ensemble, classical, neural, etc.)
+- **Combines window + architecture** for comprehensive performance analysis
+
+### 🏆 Top 3 Combinations Identification
+- **Identifies the top 3 window + architecture combinations** based on MAE performance
+- **Provides detailed descriptions** with MAE, standard deviation, and average rank
+- **Ranks combinations** for easy comparison
+
+### 📊 Statistical Significance Testing
+- **Tests if top 3 combinations are significantly better** than other combinations
+- **Multiple statistical tests**: Mann-Whitney U test, Welch's t-test
+- **Bootstrap confidence intervals** (1000 samples) for robust statistical inference
+- **Effect size calculation** (Cohen's d) to measure practical significance
+- **Individual combination testing** comparing each top combination vs others
+
+### 📈 Window and Architecture Outputs
+
+#### CSV Files Generated:
+- **`window_aggregation_*.csv`** - Performance aggregated by window size
+- **`architecture_aggregation_*.csv`** - Performance aggregated by architecture type
+- **`combination_aggregation_*.csv`** - Performance for all window+architecture combinations
+- **`top_3_combinations_*.csv`** - Top 3 performing combinations with detailed metrics
+- **`top_combinations_significance_*.csv`** - Statistical significance test results
+
+#### Visualizations Generated:
+- **`window_architecture_analysis_*.png`** - 2x2 subplot showing:
+  - MAE by window size
+  - Average rank by window size
+  - MAE by architecture type
+  - Top 3 combinations with gold/silver/bronze colors
+- **`combination_heatmap_*.png`** - Window×Architecture performance heatmap with top 3 highlighted
+
+#### Key Metrics Calculated:
+- **Mean MAE and rank** for each window size and architecture
+- **Standard deviation** for consistency measurement
+- **Min/max performance** within each group
+- **Sample count** for each aggregation
+- **Statistical significance** (p-values, effect sizes, confidence intervals)
 
 ## Usage
 
@@ -144,6 +190,37 @@ student_learning_rate       xgboost           0.0183
        avg_difficulty       xgboost           0.0438
 ```
 
+### Window and Architecture Analysis
+```
+📊 Window Size Performance:
+ window_size  mean_mae  mean_rank
+          10    0.0686     5.5000
+          15    0.0627     3.6667
+          20    0.0648     4.5000
+          25    0.0653     5.0000
+
+🏗️  Architecture Performance:
+architecture  mean_mae  mean_rank
+   classical    0.0734        7.0
+    ensemble    0.0569        2.0
+      neural    0.0646        4.5
+
+🏆 Top 3 Window + Architecture Combinations:
+   1. Window 15 + Ensemble (MAE: 0.0534±0.001, Avg Rank: 1.0)
+   2. Window 20 + Ensemble (MAE: 0.0553±0.002, Avg Rank: 2.0)
+   3. Window 10 + Ensemble (MAE: 0.0622±0.003, Avg Rank: 3.0)
+
+📈 Statistical Significance Testing:
+   Top 3 MAE: 0.0569 ± 0.0038
+   Others MAE: 0.0699 ± 0.0046
+   Difference: -0.0129
+   Mann-Whitney p-value: 0.0179
+   T-test p-value: 0.0078
+   Effect size: large (Cohen's d = -2.664)
+   Bootstrap significance: Yes
+   Bootstrap 95% CI: [-0.0185, -0.0071]
+```
+
 ## Analysis Insights
 
 ### 🏆 Model Comparison
@@ -160,6 +237,13 @@ student_learning_rate       xgboost           0.0183
 - **Coefficient of variation** helps identify which features are consistently important
 - **Model count** shows how many models actually use each feature
 - **Cross-model ranking** reveals feature stability
+
+### 🏗️ Window and Architecture Insights
+- **Ensemble methods** consistently outperform other architectures
+- **Window size 15** appears to be optimal across multiple architectures
+- **Top 3 combinations** show statistically significant improvement over others
+- **Effect sizes** are often large, indicating practical significance
+- **Bootstrap confidence intervals** provide robust statistical validation
 
 ## Integration with Existing Analysis
 

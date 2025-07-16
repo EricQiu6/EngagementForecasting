@@ -57,6 +57,146 @@ except ImportError:
     print("Mixed effects models not available")
 
 
+# =============================================================================
+# EXPERIMENT CONFIGURATIONS
+# =============================================================================
+
+class ExperimentConfig:
+    """Configuration class for comprehensive evaluation experiments."""
+    
+    def __init__(self):
+        # Dataset configurations
+        self.dataset_directory = '../data-analysis/'
+        self.available_datasets = {
+            'rolling_new': 'student_week_aggregations_rolling_new.csv',
+            'rolling': 'student_week_aggregations_rolling.csv',
+            'steve_dang_100': 'student_week_aggregations_steve_dang_100.csv',
+            'combined': 'student_week_aggregations_combined.csv'
+        }
+        
+        # Goal type configurations
+        self.goal_types = {
+            'minutes': {
+                'target_column': 'minutes_per_week',
+                'schema_name': 'time_goal_extended',
+                'description': 'Predicting minutes per week spent on learning'
+            },
+            'proficiency': {
+                'target_column': 'avg_proficiency', 
+                'schema_name': 'extended',
+                'description': 'Predicting average proficiency scores'
+            }
+        }
+        
+        # Window size configurations
+        self.window_sizes = {
+            'small': [3, 5, 8],
+            'medium': [8, 12, 15],
+            'large': [15, 20, 25],
+            'comprehensive': list(range(3, 31, 3)),  # 3, 6, 9, ..., 30
+            'focused': [8, 15],  # Common sizes for quick testing
+        }
+        
+        # Feature selection configurations - INCLUDING ENGINEERED FEATURES
+        self.feature_sets = {
+            'all': None,  # Use all features from schema
+            'top_5_temporal': [
+                'week_id', 'weeks_since_start', 'is_first_week', 
+                'temporal_gap_weeks', 'time_since_last_activity'
+            ],
+            'top_5_performance': [
+                'avg_proficiency', 'total_correct', 'total_incorrect',
+                'success_rate', 'avg_attempts_per_problem'
+            ],
+            'top_5_engagement': [
+                'minutes_per_week', 'problems_attempted', 'sessions_count',
+                'avg_session_length', 'days_active'
+            ],
+            'top_5_selected': [
+                'minutes_mean', 'current_minutes_per_week', 'minutes_std',
+                'target_lag5', 'current_week_id'
+            ],
+            'minimal_goal': [
+                'week_id', 'avg_proficiency', 'minutes_per_week'
+            ],
+            'skill_focused': [
+                'avg_proficiency', 'skill_proficiency_change',
+                'skill_difficulty_avg', 'skill_engagement_score'
+            ]
+        }
+        
+        # Cross-validation configurations
+        self.cv_configs = {
+            'standard': {'n_splits': 5, 'test_size': 1},
+            'robust': {'n_splits': 7, 'test_size': 1},
+            'quick': {'n_splits': 3, 'test_size': 1},
+            'multi_step': {'n_splits': 5, 'test_size': 2}
+        }
+        
+        # Model selection configurations
+        self.model_sets = {
+            'baselines_only': ['average_all', 'naive_forecast', 'median_all'],
+            'linear_models': ['linear_regression', 'ridge', 'lasso'],
+            'tree_models': ['random_forest', 'xgboost'],
+            'neural_models': ['mlp', 'lstm'],
+            'goal_based': ['adams_baseline_50', 'adams_baseline_60', 'adams_baseline_70'],
+            'mixed_effects': ['mixed_effects'],
+            'top_performers': ['lasso', 'random_forest', 'ridge', 'mixed_effects'],
+            'all': None  # Use all available models
+        }
+        
+        # Output configurations
+        self.output_base_dir = 'evaluation_outputs_with_features'
+        self.save_predictions = True
+        self.save_models = False  # Set to True to save trained models
+        self.save_feature_importance = True
+
+    def get_experiment_name(self, dataset_name: str, goal_type: str, 
+                          window_size: int, feature_set: str, 
+                          cv_config: str, model_set: str) -> str:
+        """Generate experiment name from configuration."""
+        return f"{dataset_name}_{goal_type}_w{window_size}_{feature_set}_{cv_config}_{model_set}"
+    
+    def get_dataset_path(self, dataset_name: str) -> str:
+        """Get full path to dataset."""
+        if dataset_name not in self.available_datasets:
+            raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(self.available_datasets.keys())}")
+        return str(Path(self.dataset_directory) / self.available_datasets[dataset_name])
+
+    def validate_configuration(self, config: Dict[str, Any]) -> bool:
+        """Validate experiment configuration."""
+        required_keys = ['dataset_name', 'goal_type', 'window_size', 'feature_set', 'cv_config', 'model_set']
+        
+        for key in required_keys:
+            if key not in config:
+                raise ValueError(f"Missing required configuration key: {key}")
+        
+        # Validate individual components
+        if config['dataset_name'] not in self.available_datasets:
+            raise ValueError(f"Invalid dataset_name: {config['dataset_name']}")
+        
+        if config['goal_type'] not in self.goal_types:
+            raise ValueError(f"Invalid goal_type: {config['goal_type']}")
+        
+        if config['feature_set'] not in self.feature_sets:
+            raise ValueError(f"Invalid feature_set: {config['feature_set']}")
+        
+        if config['cv_config'] not in self.cv_configs:
+            raise ValueError(f"Invalid cv_config: {config['cv_config']}")
+        
+        if config['model_set'] not in self.model_sets:
+            raise ValueError(f"Invalid model_set: {config['model_set']}")
+        
+        if not isinstance(config['window_size'], int) or config['window_size'] < 1:
+            raise ValueError(f"Invalid window_size: {config['window_size']}")
+        
+        return True
+
+
+# Default experiment configuration
+DEFAULT_EXPERIMENT_CONFIG = ExperimentConfig()
+
+
 def convert_numpy(obj):
     """Convert numpy types to Python types for JSON serialization."""
     if isinstance(obj, (np.integer, np.floating, np.float32, np.float64, np.int32, np.int64)):
@@ -316,30 +456,81 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
     return models
 
 
+def create_custom_schema_with_features(base_schema: DataSchema, selected_features: List[str]) -> DataSchema:
+    """Create a custom schema with only selected features."""
+    # Check if these are engineered features (contain underscores suggesting they're generated)
+    engineered_indicators = ['current_', 'lag', '_mean', '_std', '_range', '_iqr', 'target_lag', 'gap_', 'recent_', 'avg_']
+    
+    is_engineered_features = any(any(indicator in feature for indicator in engineered_indicators) 
+                                for feature in selected_features)
+    
+    if is_engineered_features:
+        # For engineered features, create a custom schema that will be filtered by the adapter
+        # We'll use all base schema features and let the adapter do the filtering
+        print(f"🔧 Detected engineered features: {selected_features}")
+        print(f"   Will be filtered by adapter after feature engineering")
+        
+        # Store the target engineered features in the schema for later filtering
+        custom_schema = DataSchema(
+            student_column=base_schema.student_column,
+            time_column=base_schema.time_column,
+            target_column=base_schema.target_column,
+            feature_columns=base_schema.feature_columns,  # Keep all base features
+            student_id_strategy=base_schema.student_id_strategy
+        )
+        
+        # Add custom attribute to store target engineered features
+        custom_schema._target_engineered_features = selected_features
+        return custom_schema
+    
+    else:
+        # Original logic for base schema features
+        available_features = set(base_schema.feature_columns)
+        valid_features = [f for f in selected_features if f in available_features]
+        
+        if not valid_features:
+            raise ValueError(f"None of the selected features {selected_features} are available in schema. "
+                           f"Available features: {available_features}")
+        
+        custom_schema = DataSchema(
+            student_column=base_schema.student_column,
+            time_column=base_schema.time_column,
+            target_column=base_schema.target_column,
+            feature_columns=valid_features,
+            student_id_strategy=base_schema.student_id_strategy
+        )
+        
+        return custom_schema
+
+
 def run_evaluation_with_predictions(
-    schema_name: str = 'time_goal_extended',
-    window_size: int = 8,
-    target_type: str = 'minutes_per_week',
-    save_predictions: bool = True
+    experiment_config: Dict[str, Any],
+    config_obj: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG
 ):
-    """Run comprehensive evaluation with prediction saving."""
+    """Run comprehensive evaluation with prediction saving using experiment configuration."""
+    
+    # Validate configuration
+    config_obj.validate_configuration(experiment_config)
+    
+    # Extract configuration
+    dataset_name = experiment_config['dataset_name']
+    goal_type = experiment_config['goal_type']
+    window_size = experiment_config['window_size']
+    feature_set = experiment_config['feature_set']
+    cv_config = experiment_config['cv_config']
+    model_set = experiment_config['model_set']
+    
+    # Get experiment name
+    experiment_name = config_obj.get_experiment_name(
+        dataset_name, goal_type, window_size, feature_set, cv_config, model_set
+    )
     
     print(f"\n{'='*80}")
-    print(f"COMPREHENSIVE EVALUATION WITH SAVED PREDICTIONS")
+    print(f"EXPERIMENT: {experiment_name}")
     print(f"{'='*80}")
     
-    # Setup configuration
-    evaluation_config = {
-        'schema_name': schema_name,
-        'window_size': window_size,
-        'target_type': target_type,
-        'n_splits': 5,
-        'test_size': 1,
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    # Load data
-    data_path = '../data-analysis/student_week_aggregations_rolling_new.csv'
+    # Get dataset path
+    data_path = config_obj.get_dataset_path(dataset_name)
     
     # Check if data file exists
     if not Path(data_path).exists():
@@ -347,12 +538,45 @@ def run_evaluation_with_predictions(
         print("Please ensure the data file exists or update the path.")
         return None
     
-    # Select schema based on target type
-    if target_type == 'minutes_per_week':
-        schema = get_schema('time_goal_extended')
-    else:  # avg_proficiency
-        schema = get_schema('extended')
+    # Get goal configuration
+    goal_config = config_obj.goal_types[goal_type]
+    target_column = goal_config['target_column']
+    schema_name = goal_config['schema_name']
     
+    # Get base schema
+    base_schema = get_schema(schema_name)
+    
+    # Apply feature selection if specified
+    if feature_set != 'all' and config_obj.feature_sets[feature_set] is not None:
+        selected_features = config_obj.feature_sets[feature_set]
+        schema = create_custom_schema_with_features(base_schema, selected_features)
+        print(f"🎯 Using feature set '{feature_set}': {len(selected_features)} features")
+        print(f"   Features: {selected_features}")
+    else:
+        schema = base_schema
+        print(f"🎯 Using all features from schema: {len(schema.feature_columns)} features")
+    
+    # Get CV configuration
+    cv_params = config_obj.cv_configs[cv_config]
+    
+    # Setup evaluation configuration
+    evaluation_config = {
+        'experiment_name': experiment_name,
+        'dataset_name': dataset_name,
+        'dataset_path': data_path,
+        'goal_type': goal_type,
+        'target_column': target_column,
+        'schema_name': schema_name,
+        'window_size': window_size,
+        'feature_set': feature_set,
+        'n_features': len(schema.feature_columns),
+        'cv_config': cv_config,
+        'model_set': model_set,
+        'timestamp': datetime.now().isoformat(),
+        **cv_params
+    }
+    
+    # Create dataset
     dataset = SchemaBasedTimeSeriesDataset(
         data_path=data_path,
         schema=schema,
@@ -360,18 +584,31 @@ def run_evaluation_with_predictions(
         validate_data=False
     )
     
-    print(f"\nDataset loaded:")
+    print(f"\nDataset Configuration:")
+    print(f"  - Dataset: {dataset_name}")
     print(f"  - Total sequences: {len(dataset)}")
+    print(f"  - Goal: {goal_type} ({target_column})")
     print(f"  - Window size: {window_size}")
-    print(f"  - Target: {target_type}")
-    print(f"  - Schema: {schema_name}")
+    print(f"  - Features: {len(schema.feature_columns)}")
+    print(f"  - CV: {cv_config} ({cv_params})")
+    print(f"  - Models: {model_set}")
     
     # Create prediction saver
-    saver = PredictionSaver(f"evaluation_outputs/{target_type}_window{window_size}")
+    output_dir = f"{config_obj.output_base_dir}/{experiment_name}"
+    saver = PredictionSaver(output_dir)
     saver.save_evaluation_config(evaluation_config)
     
-    # Get all models
-    models = create_all_models()
+    # Get models based on model set
+    all_models = create_all_models()
+    if model_set == 'all' or config_obj.model_sets[model_set] is None:
+        models = all_models
+    else:
+        selected_model_names = config_obj.model_sets[model_set]
+        models = {name: all_models[name] for name in selected_model_names if name in all_models}
+    
+    if not models:
+        print(f"❌ No models available for model set: {model_set}")
+        return None
     
     # Run evaluation
     results = {}
@@ -392,7 +629,7 @@ def run_evaluation_with_predictions(
                         sklearn_model=None,  # Not used
                         schema=schema,
                         lag_window=window_size,
-                        target_col='minutes_per_week'
+                        target_col=target_column  # Use the configured target column
                     )
                 else:
                     print("❌ Mixed effects not available, skipping...")
@@ -421,14 +658,19 @@ def run_evaluation_with_predictions(
                     lag_window=window_size
                 )
             
+            # Apply engineered feature filtering if needed
+            if hasattr(schema, '_target_engineered_features'):
+                # Create a custom adapter that filters engineered features
+                adapter = EngineeredFeatureFilterAdapter(adapter, schema._target_engineered_features)
+            
             # Create extended cross-validator
             cv = ExtendedCrossValidator(
                 adapter, dataset, 
-                prediction_saver=saver if save_predictions else None,
+                prediction_saver=saver if config_obj.save_predictions else None,
                 model_name=model_name
             )
             
-            # Run cross-validation with appropriate parameters
+            # Run cross-validation with configured parameters
             if model_config.get('is_pytorch', False):
                 # PyTorch models need different training parameters
                 cv_results = cv.cross_validate(
@@ -450,7 +692,7 @@ def run_evaluation_with_predictions(
             training_time = time.time() - start_time
             
             # Save model summary
-            if save_predictions:
+            if config_obj.save_predictions:
                 saver.save_model_summary(model_name, cv_results, model_config, training_time)
             
             # Store results
@@ -479,12 +721,12 @@ def run_evaluation_with_predictions(
         json.dump(convert_numpy(overall_results), f, indent=2)
     
     print(f"\n{'='*80}")
-    print("EVALUATION COMPLETE")
+    print(f"EXPERIMENT COMPLETE: {experiment_name}")
     print(f"{'='*80}")
     print(f"\nResults saved to: {saver.output_dir}")
     print_summary(results)
     
-    return results
+    return results, evaluation_config
 
 
 def calculate_summary_statistics(results: Dict[str, Any]) -> Dict[str, Any]:
@@ -525,16 +767,152 @@ def print_summary(results: Dict[str, Any]):
               f"{result['mae_mean']:<10.3f} {result['rmse_mean']:<10.3f}")
 
 
+class EngineeredFeatureFilterAdapter:
+    """Adapter wrapper that filters engineered features after they're created."""
+    
+    def __init__(self, base_adapter, target_features: List[str]):
+        self.base_adapter = base_adapter
+        self.target_features = target_features
+        
+    def fit(self, *args, **kwargs):
+        return self.base_adapter.fit(*args, **kwargs)
+    
+    def predict(self, data):
+        return self.base_adapter.predict(data)
+    
+    def cross_validate(self, *args, **kwargs):
+        return self.base_adapter.cross_validate(*args, **kwargs)
+    
+    def _dataloader_to_arrays(self, dataloader):
+        # Get full feature arrays from base adapter
+        X_full, y = self.base_adapter._dataloader_to_arrays(dataloader)
+        
+        # Get feature names from base adapter 
+        if hasattr(self.base_adapter, 'get_feature_names'):
+            all_feature_names = self.base_adapter.get_feature_names()
+            
+            if all_feature_names and len(all_feature_names) == X_full.shape[1]:
+                # Find indices of target features
+                target_indices = []
+                for target_feature in self.target_features:
+                    if target_feature in all_feature_names:
+                        target_indices.append(all_feature_names.index(target_feature))
+                
+                if target_indices:
+                    print(f"🔧 Filtering to {len(target_indices)} engineered features: {self.target_features}")
+                    X_filtered = X_full[:, target_indices]
+                    return X_filtered, y
+                else:
+                    print(f"⚠️  No target features found in engineered features, using all")
+                    return X_full, y
+            else:
+                print(f"⚠️  Feature name mismatch, using all features")
+                return X_full, y
+        else:
+            print(f"⚠️  No feature names available, using all features")
+            return X_full, y
+    
+    def __getattr__(self, name):
+        """Delegate all other attributes to the base adapter."""
+        return getattr(self.base_adapter, name)
+
+
+def run_ablation_study():
+    """Run ablation study with user's specific engineered features."""
+    
+    print("\n" + "🔬 ABLATION STUDY: TOP 5 ENGINEERED FEATURES")
+    print("=" * 80)
+    
+    # Ablation study configuration
+    ablation_config = {
+        'dataset_name': 'rolling_new',
+        'goal_type': 'minutes',
+        'window_size': 6,  # Use optimal window size from our analysis
+        'feature_set': 'top_5_selected',  # Your engineered features
+        'cv_config': 'standard',
+        'model_set': 'all'  # Test all models
+    }
+    
+    print("Configuration:")
+    print(f"  Dataset: {ablation_config['dataset_name']}")
+    print(f"  Goal: {ablation_config['goal_type']}")
+    print(f"  Window size: {ablation_config['window_size']}")
+    print(f"  Feature set: {ablation_config['feature_set']}")
+    print(f"  Features: {DEFAULT_EXPERIMENT_CONFIG.feature_sets['top_5_selected']}")
+    print(f"  CV: {ablation_config['cv_config']}")
+    print(f"  Models: {ablation_config['model_set']}")
+    
+    # Run the experiment
+    results, config = run_evaluation_with_predictions(
+        experiment_config=ablation_config,
+        config_obj=DEFAULT_EXPERIMENT_CONFIG
+    )
+    
+    # Additional analysis
+    print("\n" + "📊 ABLATION RESULTS SUMMARY")
+    print("=" * 80)
+    
+    if results:
+        # Sort by MAE performance
+        sorted_results = sorted(
+            [(k, v) for k, v in results.items() if 'mae_mean' in v],
+            key=lambda x: x[1]['mae_mean']
+        )
+        
+        print(f"\nTop 5 performing models with engineered features:")
+        for i, (model_name, result) in enumerate(sorted_results[:5], 1):
+            print(f"{i}. {model_name}: MAE={result['mae_mean']:.3f}±{result['mae_std']:.3f}")
+        
+        # Compare with baseline
+        baseline_models = ['average_all', 'naive_forecast', 'adams_baseline_50']
+        baseline_results = [(name, results[name]) for name in baseline_models if name in results and 'mae_mean' in results[name]]
+        
+        if baseline_results:
+            print(f"\nBaseline comparisons:")
+            for name, result in baseline_results:
+                print(f"  {name}: MAE={result['mae_mean']:.3f}±{result['mae_std']:.3f}")
+        
+        # Best model improvement
+        if sorted_results:
+            best_model, best_result = sorted_results[0]
+            print(f"\n🏆 Best model: {best_model}")
+            print(f"   MAE: {best_result['mae_mean']:.3f}±{best_result['mae_std']:.3f}")
+            
+            if baseline_results:
+                baseline_mae = min(r[1]['mae_mean'] for r in baseline_results)
+                improvement = ((baseline_mae - best_result['mae_mean']) / baseline_mae) * 100
+                print(f"   Improvement over baseline: {improvement:.1f}%")
+    
+    return results, config
+
+
 if __name__ == "__main__":
+    # Run ablation study with user's specific engineered features
+    print("🚀 Running ablation study with engineered features...")
+    run_ablation_study()
+    
+    # Optional: Run additional experiments
+    # Uncomment below to run window size analysis
+    """
     # Run evaluation for minutes_per_week with different window sizes
     for window_size in [8]:  # Start with window size 8
         print(f"\n\n{'#'*80}")
         print(f"# WINDOW SIZE: {window_size}")
         print(f"{'#'*80}")
         
+        # Define a dummy experiment_config for the main loop
+        # In a real scenario, you'd load this from a config file or pass it as an argument
+        dummy_experiment_config = {
+            'dataset_name': 'rolling_new',
+            'goal_type': 'minutes',
+            'window_size': window_size,
+            'feature_set': 'all', # Or a specific set like 'top_5_temporal'
+            'cv_config': 'standard',
+            'model_set': 'all' # Or a specific set like 'baselines_only'
+        }
+        
         run_evaluation_with_predictions(
-            schema_name='time_goal_extended',
-            window_size=window_size,
-            target_type='minutes_per_week',
-            save_predictions=True
-        ) 
+            experiment_config=dummy_experiment_config,
+            config_obj=DEFAULT_EXPERIMENT_CONFIG
+        )
+    """ 

@@ -168,17 +168,21 @@ class PredictionAnalyzer:
         print("\n6. Analyzing feature importance...")
         self.analyze_feature_importance(output_dir, timestamp)
         
-        # 7. Bootstrap confidence intervals
-        print("\n7. Computing bootstrap confidence intervals...")
-        bootstrap_results = self.compute_bootstrap_confidence_intervals()
-        bootstrap_results.to_csv(output_dir / f'bootstrap_confidence_intervals_{timestamp}.csv')
+        # 7. Hyperparameter sensitivity analysis (if available)
+        print("\n7. Analyzing hyperparameter sensitivity...")
+        sensitivity_df = self.analyze_hyperparameter_sensitivity_from_results(output_dir, timestamp)
         
-        # 8. Window and Architecture Analysis
-        print("\n8. Analyzing window and architecture combinations...")
+        # 8. Key bootstrap findings (category comparisons)
+        print("\n8. Computing key bootstrap findings...")
+        bootstrap_results = self.compute_bootstrap_confidence_intervals()
+        bootstrap_results.to_csv(output_dir / f'key_bootstrap_findings_{timestamp}.csv')
+        
+        # 9. Window and Architecture Analysis
+        print("\n9. Analyzing window and architecture combinations...")
         window_arch_results = self.analyze_window_architecture_combinations(output_dir, timestamp)
         
-        # 9. Create summary report
-        print("\n9. Creating summary report...")
+        # 10. Create summary report
+        print("\n10. Creating summary report...")
         self.create_summary_report(output_dir, timestamp, performance_summary, significance_results)
         
         print(f"\n✅ Analysis complete! Results saved to: {output_dir}")
@@ -260,6 +264,13 @@ class PredictionAnalyzer:
         summary_df['rmse_rank'] = summary_df['rmse_mean'].rank()
         summary_df['r2_rank'] = summary_df['r2_mean'].rank(ascending=False)
         
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mae_mean', 'mae_std', 'rmse_mean', 'rmse_std', 'r2_mean', 'r2_std', 
+                           'median_ae', 'percentile_90_ae', 'mean_percentage_error']
+        for col in numerical_columns:
+            if col in summary_df.columns:
+                summary_df[col] = summary_df[col].round(2)
+        
         return summary_df
     
     def perform_significance_testing(self, alpha: float = 0.05) -> pd.DataFrame:
@@ -324,7 +335,15 @@ class PredictionAnalyzer:
                     'effect_size': self._interpret_effect_size(abs(cohens_d))
                 })
         
-        return pd.DataFrame(significance_results)
+        significance_df = pd.DataFrame(significance_results)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['model1_mae', 'model2_mae', 'mae_difference', 'test_statistic', 'p_value', 'cohens_d']
+        for col in numerical_columns:
+            if col in significance_df.columns:
+                significance_df[col] = significance_df[col].round(2)
+        
+        return significance_df
     
     def _interpret_effect_size(self, cohens_d: float) -> str:
         """Interpret Cohen's d effect size."""
@@ -372,7 +391,7 @@ class PredictionAnalyzer:
             
             ax.set_xlabel('Actual Values')
             ax.set_ylabel('Predicted Values')
-            ax.set_title(f'{model_name}\nMAE: {mae:.3f}, R²: {r2:.3f}')
+            ax.set_title(f'{model_name}\nMAE: {mae:.2f}, R²: {r2:.2f}')
             ax.legend()
             ax.grid(True, alpha=0.3)
         
@@ -400,8 +419,8 @@ class PredictionAnalyzer:
             
             # Histogram of errors
             ax.hist(errors, bins=30, alpha=0.7, density=True, edgecolor='black')
-            ax.axvline(np.mean(errors), color='red', linestyle='--', label=f'Mean: {np.mean(errors):.3f}')
-            ax.axvline(np.median(errors), color='green', linestyle='--', label=f'Median: {np.median(errors):.3f}')
+            ax.axvline(np.mean(errors), color='red', linestyle='--', label=f'Mean: {np.mean(errors):.2f}')
+            ax.axvline(np.median(errors), color='green', linestyle='--', label=f'Median: {np.median(errors):.2f}')
             
             ax.set_xlabel('Absolute Error')
             ax.set_ylabel('Density')
@@ -517,6 +536,181 @@ class PredictionAnalyzer:
             plt.savefig(output_dir / f'performance_by_category_{timestamp}.png', dpi=300, bbox_inches='tight')
             plt.close()
     
+    def create_hyperparameter_sensitivity_plots(self, sensitivity_df: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Create visualizations for hyperparameter sensitivity analysis."""
+        
+        if sensitivity_df.empty:
+            print("No hyperparameter sensitivity data available for plotting.")
+            return
+        
+        print("Creating hyperparameter sensitivity plots...")
+        
+        # Create comprehensive sensitivity visualization
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # 1. Coefficient of variation comparison (lower = more robust)
+        ax = axes[0, 0]
+        models = sensitivity_df['base_model'].values
+        cvs = sensitivity_df['coefficient_of_variation'].values
+        
+        colors = ['green' if cv < 0.1 else 'orange' if cv < 0.2 else 'red' for cv in cvs]
+        bars = ax.bar(models, cvs, color=colors, alpha=0.7)
+        
+        ax.set_ylabel('Coefficient of Variation')
+        ax.set_title('Hyperparameter Sensitivity (Lower = More Robust)')
+        ax.axhline(y=0.1, color='green', linestyle='--', alpha=0.5, label='Robust (CV < 0.1)')
+        ax.axhline(y=0.2, color='orange', linestyle='--', alpha=0.5, label='Moderate (CV < 0.2)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Add value labels on bars
+        for bar, cv in zip(bars, cvs):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                    f'{cv:.3f}', ha='center', va='bottom', fontsize=9)
+        
+        # 2. Performance range across hyperparameters
+        ax = axes[0, 1]
+        ranges = sensitivity_df['mae_range'].values
+        
+        bars = ax.bar(models, ranges, color='skyblue', alpha=0.7)
+        ax.set_ylabel('MAE Range')
+        ax.set_title('Performance Range Across Hyperparameters')
+        ax.grid(True, alpha=0.3)
+        
+        # Add value labels
+        for bar, range_val in zip(bars, ranges):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                    f'{range_val:.2f}', ha='center', va='bottom', fontsize=9)
+        
+        # 3. Best vs worst performance
+        ax = axes[1, 0]
+        x_pos = np.arange(len(models))
+        width = 0.35
+        
+        best_maes = sensitivity_df['best_mae'].values
+        worst_maes = sensitivity_df['worst_mae'].values
+        
+        ax.bar(x_pos - width/2, best_maes, width, label='Best Config', alpha=0.7, color='green')
+        ax.bar(x_pos + width/2, worst_maes, width, label='Worst Config', alpha=0.7, color='red')
+        
+        ax.set_xlabel('Model')
+        ax.set_ylabel('MAE')
+        ax.set_title('Best vs Worst Hyperparameter Performance')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(models, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # 4. Number of configurations tested
+        ax = axes[1, 1]
+        n_configs = sensitivity_df['n_configurations'].values
+        
+        bars = ax.bar(models, n_configs, color='purple', alpha=0.7)
+        ax.set_ylabel('Number of Configurations')
+        ax.set_title('Hyperparameter Configurations Tested')
+        ax.grid(True, alpha=0.3)
+        
+        # Add value labels
+        for bar, n_config in zip(bars, n_configs):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                    f'{n_config}', ha='center', va='bottom', fontsize=10)
+        
+        # Rotate x-axis labels for better readability
+        for ax in axes.flat:
+            ax.tick_params(axis='x', rotation=45)
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / f'hyperparameter_sensitivity_{timestamp}.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Create sensitivity ranking visualization
+        self._create_sensitivity_ranking_plot(sensitivity_df, output_dir, timestamp)
+        
+        print(f"✅ Hyperparameter sensitivity plots saved")
+    
+    def _create_sensitivity_ranking_plot(self, sensitivity_df: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Create a detailed ranking plot for hyperparameter sensitivity."""
+        
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Sort by coefficient of variation for ranking
+        sorted_df = sensitivity_df.sort_values('coefficient_of_variation')
+        
+        models = sorted_df['base_model'].values
+        cvs = sorted_df['coefficient_of_variation'].values
+        ranges = sorted_df['mae_range'].values
+        n_configs = sorted_df['n_configurations'].values
+        
+        # Create horizontal bar chart with coefficient of variation
+        y_pos = np.arange(len(models))
+        
+        # Color bars based on robustness
+        colors = ['darkgreen' if cv < 0.05 else 'green' if cv < 0.1 else 
+                 'orange' if cv < 0.2 else 'red' for cv in cvs]
+        
+        bars = ax.barh(y_pos, cvs, color=colors, alpha=0.7)
+        
+        # Add range information as text
+        for i, (cv, range_val, n_config) in enumerate(zip(cvs, ranges, n_configs)):
+            ax.text(cv + 0.01, i, f'Range: {range_val:.2f}, N: {n_config}', 
+                   va='center', fontsize=9)
+        
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(models)
+        ax.set_xlabel('Coefficient of Variation (Lower = More Robust)')
+        ax.set_title('Model Robustness Ranking\n(Based on Hyperparameter Sensitivity)')
+        
+        # Add robustness zones
+        ax.axvline(x=0.05, color='darkgreen', linestyle='--', alpha=0.5, label='Very Robust')
+        ax.axvline(x=0.1, color='green', linestyle='--', alpha=0.5, label='Robust')
+        ax.axvline(x=0.2, color='orange', linestyle='--', alpha=0.5, label='Moderate')
+        ax.legend()
+        
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / f'sensitivity_ranking_{timestamp}.png', dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def analyze_hyperparameter_sensitivity_from_results(self, output_dir: Path, timestamp: str) -> pd.DataFrame:
+        """Analyze hyperparameter sensitivity from saved results data."""
+        
+        # Check if hyperparameter sensitivity data exists
+        sensitivity_file = self.results_dir / 'hyperparameter_sensitivity.csv'
+        
+        if sensitivity_file.exists():
+            print("Loading hyperparameter sensitivity data from file...")
+            sensitivity_df = pd.read_csv(sensitivity_file)
+            
+            # Create visualizations
+            self.create_hyperparameter_sensitivity_plots(sensitivity_df, output_dir, timestamp)
+            
+            return sensitivity_df
+        
+        else:
+            # Try to extract hyperparameter sensitivity from results data
+            print("No hyperparameter sensitivity file found. Analyzing from results data...")
+            
+            # Import the analysis function from the evaluation script
+            from comprehensive_evaluation_with_saved_predictions import analyze_hyperparameter_sensitivity
+            
+            sensitivity_df = analyze_hyperparameter_sensitivity(self.results_data)
+            
+            if not sensitivity_df.empty:
+                # Save the analysis
+                sensitivity_df.to_csv(output_dir / f'hyperparameter_sensitivity_{timestamp}.csv', index=False)
+                
+                # Create visualizations
+                self.create_hyperparameter_sensitivity_plots(sensitivity_df, output_dir, timestamp)
+                
+                print(f"✅ Hyperparameter sensitivity analysis completed and saved")
+            else:
+                print("No hyperparameter sensitivity data available (single configs only)")
+            
+            return sensitivity_df
+     
     def analyze_feature_importance(self, output_dir: Path, timestamp: str):
         """Analyze feature importance if available from the models."""
         print("Extracting and analyzing feature importance...")
@@ -633,6 +827,11 @@ class PredictionAnalyzer:
                 })
         
         df_summary = pd.DataFrame(summary_records)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        if 'importance' in df_summary.columns:
+            df_summary['importance'] = df_summary['importance'].round(2)
+        
         df_summary.to_csv(output_dir / f'top_features_by_model_{timestamp}.csv', index=False)
         print(f"📊 Top features summary saved")
     
@@ -782,7 +981,7 @@ class PredictionAnalyzer:
                     for bar, importance in zip(bars, importances):
                         height = bar.get_height()
                         ax.text(bar.get_x() + bar.get_width()/2., height,
-                                f'{importance:.3f}', ha='center', va='bottom', fontsize=8)
+                                f'{importance:.2f}', ha='center', va='bottom', fontsize=8)
             
             plt.tight_layout()
             plt.savefig(output_dir / f'key_features_comparison_{timestamp}.png', 
@@ -869,6 +1068,8 @@ class PredictionAnalyzer:
         plt.close()
         
         # Save category analysis to CSV
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        cat_df = cat_df.round(2)
         cat_df.to_csv(output_dir / f'feature_categories_analysis_{timestamp}.csv')
         
         print(f"📊 Feature category analysis saved")
@@ -925,6 +1126,13 @@ class PredictionAnalyzer:
         # Convert to DataFrame and save
         df_gap = pd.DataFrame(gap_analysis)
         df_gap = df_gap.sort_values('avg_importance', ascending=False)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['avg_importance', 'std_importance', 'avg_rank']
+        for col in numerical_columns:
+            if col in df_gap.columns:
+                df_gap[col] = df_gap[col].round(2)
+        
         df_gap.to_csv(output_dir / f'gap_features_analysis_{timestamp}.csv', index=False)
         
         # Create visualization
@@ -1080,62 +1288,258 @@ class PredictionAnalyzer:
             for bar, importance in zip(bars, importances):
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
-                        f'{importance:.3f}', ha='center', va='bottom', fontsize=8)
+                        f'{importance:.2f}', ha='center', va='bottom', fontsize=8)
         
         plt.tight_layout()
         plt.savefig(output_dir / f'specific_features_importance_{timestamp}.png', dpi=300, bbox_inches='tight')
         plt.close()
     
     def compute_bootstrap_confidence_intervals(self, n_bootstrap: int = 1000, confidence_level: float = 0.95) -> pd.DataFrame:
-        """Compute bootstrap confidence intervals for model performance."""
-        bootstrap_results = []
-        alpha = 1 - confidence_level
+        """Compute focused bootstrap analysis comparing model categories to baselines."""
+        print("Computing focused bootstrap analysis: model categories vs baselines...")
         
-        for model_name in self.prediction_df['model'].unique():
-            model_data = self.prediction_df[self.prediction_df['model'] == model_name]
-            errors = model_data['error'].values
-            
-            if len(errors) < 10:  # Skip models with too few predictions
+        # Define model categories
+        baselines = [
+            'median_no_zeros', 'median_all', 'mean_no_zeros', 'average_all', 
+            'naive_forecast', 'adams_baseline_50', 'adams_baseline_60', 'adams_baseline_70'
+        ]
+        
+        # Get available models
+        available_models = set(self.prediction_df['model'].unique())
+        
+        # Filter baselines to only available ones
+        available_baselines = [b for b in baselines if b in available_models]
+        
+        # Categorize remaining models
+        trees = []
+        linear = []
+        neural = []
+        other = []
+        
+        for model in available_models:
+            if model in available_baselines:
                 continue
-            
-            # Bootstrap resampling
-            bootstrap_maes = []
-            bootstrap_rmses = []
-            
-            for _ in range(n_bootstrap):
-                # Resample with replacement
-                bootstrap_indices = np.random.choice(len(errors), size=len(errors), replace=True)
-                bootstrap_errors = errors[bootstrap_indices]
-                bootstrap_true = model_data['y_true'].values[bootstrap_indices]
-                bootstrap_pred = model_data['y_pred'].values[bootstrap_indices]
+            elif model in self.results_data:
+                category = self.results_data[model].get('category', 'unknown').lower()
+                if 'tree' in category or 'forest' in category or 'xgb' in category or 'gradient' in category:
+                    trees.append(model)
+                elif 'linear' in category:
+                    linear.append(model)
+                elif 'neural' in category or 'mlp' in category or 'lstm' in category:
+                    neural.append(model)
+                else:
+                    other.append(model)
+            else:
+                # Try to infer from model name
+                model_lower = model.lower()
+                if any(tree_term in model_lower for tree_term in ['forest', 'tree', 'xgb', 'gradient']):
+                    trees.append(model)
+                elif any(linear_term in model_lower for linear_term in ['linear', 'ridge', 'lasso', 'elastic']):
+                    linear.append(model)
+                elif any(neural_term in model_lower for neural_term in ['mlp', 'lstm', 'neural', 'dlinear']):
+                    neural.append(model)
+                else:
+                    other.append(model)
+        
+        print(f"📊 Model categorization:")
+        print(f"   Baselines: {available_baselines}")
+        print(f"   Trees: {trees}")
+        print(f"   Linear: {linear}")
+        print(f"   Neural: {neural}")
+        print(f"   Other: {other}")
+        
+        # Calculate baseline average performance with CI
+        baseline_results = self._calculate_category_bootstrap(available_baselines, n_bootstrap, confidence_level)
+        
+        # Results list for summary table
+        summary_results = []
+        
+        # Add baseline row
+        summary_results.append({
+            'category': 'Baseline',
+            'comparison_type': 'Average',
+            'best_model': f"Average of {len(available_baselines)} models",
+            'mae_mean': baseline_results['mae_mean'],
+            'mae_ci_lower': baseline_results['mae_ci_lower'],
+            'mae_ci_upper': baseline_results['mae_ci_upper'],
+            'mae_ci': f"{baseline_results['mae_mean']:.2f} ({baseline_results['mae_ci_lower']:.2f}-{baseline_results['mae_ci_upper']:.2f})",
+            'vs_baseline_pct': 0.0,
+            'p_value': np.nan,
+            'n_models': len(available_baselines)
+        })
+        
+        # Analyze each category
+        for category_name, models in [('Trees', trees), ('Linear', linear), ('Neural', neural)]:
+            if not models:
+                continue
                 
-                bootstrap_mae = np.mean(bootstrap_errors)
-                bootstrap_rmse = np.sqrt(np.mean((bootstrap_true - bootstrap_pred)**2))
-                
-                bootstrap_maes.append(bootstrap_mae)
-                bootstrap_rmses.append(bootstrap_rmse)
+            # Best model in category
+            best_model = self._get_best_model_in_category(models)
+            best_results = self._calculate_model_bootstrap(best_model, n_bootstrap, confidence_level)
+            best_vs_baseline = self._compare_to_baseline(best_model, available_baselines)
             
-            # Calculate confidence intervals
-            mae_ci_lower = np.percentile(bootstrap_maes, (alpha/2) * 100)
-            mae_ci_upper = np.percentile(bootstrap_maes, (1 - alpha/2) * 100)
-            rmse_ci_lower = np.percentile(bootstrap_rmses, (alpha/2) * 100)
-            rmse_ci_upper = np.percentile(bootstrap_rmses, (1 - alpha/2) * 100)
+            summary_results.append({
+                'category': category_name,
+                'comparison_type': 'Best',
+                'best_model': best_model,
+                'mae_mean': best_results['mae_mean'],
+                'mae_ci_lower': best_results['mae_ci_lower'],
+                'mae_ci_upper': best_results['mae_ci_upper'],
+                'mae_ci': f"{best_results['mae_mean']:.2f} ({best_results['mae_ci_lower']:.2f}-{best_results['mae_ci_upper']:.2f})",
+                'vs_baseline_pct': best_vs_baseline['improvement_pct'],
+                'p_value': best_vs_baseline['p_value'],
+                'n_models': 1
+            })
             
-            bootstrap_results.append({
-                'model': model_name,
-                'mae_mean': np.mean(errors),
-                'mae_ci_lower': mae_ci_lower,
-                'mae_ci_upper': mae_ci_upper,
-                'mae_ci_width': mae_ci_upper - mae_ci_lower,
-                'rmse_mean': np.sqrt(np.mean((model_data['y_true'] - model_data['y_pred'])**2)),
-                'rmse_ci_lower': rmse_ci_lower,
-                'rmse_ci_upper': rmse_ci_upper,
-                'rmse_ci_width': rmse_ci_upper - rmse_ci_lower,
-                'n_bootstrap': n_bootstrap,
-                'confidence_level': confidence_level
+            # Average of category
+            avg_results = self._calculate_category_bootstrap(models, n_bootstrap, confidence_level)
+            avg_vs_baseline = self._compare_category_to_baseline(models, available_baselines)
+            
+            summary_results.append({
+                'category': category_name,
+                'comparison_type': 'Average',
+                'best_model': f"Average of {len(models)} models",
+                'mae_mean': avg_results['mae_mean'],
+                'mae_ci_lower': avg_results['mae_ci_lower'],
+                'mae_ci_upper': avg_results['mae_ci_upper'],
+                'mae_ci': f"{avg_results['mae_mean']:.2f} ({avg_results['mae_ci_lower']:.2f}-{avg_results['mae_ci_upper']:.2f})",
+                'vs_baseline_pct': avg_vs_baseline['improvement_pct'],
+                'p_value': avg_vs_baseline['p_value'],
+                'n_models': len(models)
             })
         
-        return pd.DataFrame(bootstrap_results)
+        # Convert to DataFrame and round
+        summary_df = pd.DataFrame(summary_results)
+        
+        # Round numerical columns
+        numerical_columns = ['mae_mean', 'mae_ci_lower', 'mae_ci_upper', 'vs_baseline_pct', 'p_value']
+        for col in numerical_columns:
+            if col in summary_df.columns:
+                summary_df[col] = summary_df[col].round(3)
+        
+        return summary_df
+    
+    def _calculate_model_bootstrap(self, model_name: str, n_bootstrap: int, confidence_level: float) -> dict:
+        """Calculate bootstrap CI for a single model."""
+        model_data = self.prediction_df[self.prediction_df['model'] == model_name]
+        errors = model_data['error'].values
+        
+        bootstrap_maes = []
+        for _ in range(n_bootstrap):
+            bootstrap_indices = np.random.choice(len(errors), size=len(errors), replace=True)
+            bootstrap_errors = errors[bootstrap_indices]
+            bootstrap_maes.append(np.mean(bootstrap_errors))
+        
+        alpha = 1 - confidence_level
+        mae_ci_lower = np.percentile(bootstrap_maes, (alpha/2) * 100)
+        mae_ci_upper = np.percentile(bootstrap_maes, (1 - alpha/2) * 100)
+        
+        return {
+            'mae_mean': np.mean(errors),
+            'mae_ci_lower': mae_ci_lower,
+            'mae_ci_upper': mae_ci_upper
+        }
+    
+    def _calculate_category_bootstrap(self, models: list, n_bootstrap: int, confidence_level: float) -> dict:
+        """Calculate bootstrap CI for average performance across a category."""
+        # Get all errors from all models in category
+        all_category_errors = []
+        for model in models:
+            model_data = self.prediction_df[self.prediction_df['model'] == model]
+            all_category_errors.extend(model_data['error'].values)
+        
+        all_category_errors = np.array(all_category_errors)
+        
+        bootstrap_maes = []
+        for _ in range(n_bootstrap):
+            bootstrap_indices = np.random.choice(len(all_category_errors), size=len(all_category_errors), replace=True)
+            bootstrap_errors = all_category_errors[bootstrap_indices]
+            bootstrap_maes.append(np.mean(bootstrap_errors))
+        
+        alpha = 1 - confidence_level
+        mae_ci_lower = np.percentile(bootstrap_maes, (alpha/2) * 100)
+        mae_ci_upper = np.percentile(bootstrap_maes, (1 - alpha/2) * 100)
+        
+        return {
+            'mae_mean': np.mean(all_category_errors),
+            'mae_ci_lower': mae_ci_lower,
+            'mae_ci_upper': mae_ci_upper
+        }
+    
+    def _get_best_model_in_category(self, models: list) -> str:
+        """Get the best performing model in a category."""
+        best_mae = float('inf')
+        best_model = None
+        
+        for model in models:
+            model_data = self.prediction_df[self.prediction_df['model'] == model]
+            mae = np.mean(model_data['error'].values)
+            if mae < best_mae:
+                best_mae = mae
+                best_model = model
+        
+        return best_model
+    
+    def _compare_to_baseline(self, model_name: str, baseline_models: list) -> dict:
+        """Compare a single model to baseline average."""
+        # Get model errors
+        model_data = self.prediction_df[self.prediction_df['model'] == model_name]
+        model_errors = model_data['error'].values
+        
+        # Get baseline errors (average across all baseline models)
+        baseline_errors = []
+        for baseline in baseline_models:
+            baseline_data = self.prediction_df[self.prediction_df['model'] == baseline]
+            baseline_errors.extend(baseline_data['error'].values)
+        baseline_errors = np.array(baseline_errors)
+        
+        # Calculate improvement
+        model_mae = np.mean(model_errors)
+        baseline_mae = np.mean(baseline_errors)
+        improvement_pct = ((baseline_mae - model_mae) / baseline_mae) * 100
+        
+        # Statistical test (Mann-Whitney U test)
+        try:
+            _, p_value = stats.mannwhitneyu(model_errors, baseline_errors, alternative='less')
+        except:
+            p_value = np.nan
+        
+        return {
+            'improvement_pct': improvement_pct,
+            'p_value': p_value
+        }
+    
+    def _compare_category_to_baseline(self, category_models: list, baseline_models: list) -> dict:
+        """Compare category average to baseline average."""
+        # Get category errors
+        category_errors = []
+        for model in category_models:
+            model_data = self.prediction_df[self.prediction_df['model'] == model]
+            category_errors.extend(model_data['error'].values)
+        category_errors = np.array(category_errors)
+        
+        # Get baseline errors
+        baseline_errors = []
+        for baseline in baseline_models:
+            baseline_data = self.prediction_df[self.prediction_df['model'] == baseline]
+            baseline_errors.extend(baseline_data['error'].values)
+        baseline_errors = np.array(baseline_errors)
+        
+        # Calculate improvement
+        category_mae = np.mean(category_errors)
+        baseline_mae = np.mean(baseline_errors)
+        improvement_pct = ((baseline_mae - category_mae) / baseline_mae) * 100
+        
+        # Statistical test
+        try:
+            _, p_value = stats.mannwhitneyu(category_errors, baseline_errors, alternative='less')
+        except:
+            p_value = np.nan
+        
+        return {
+            'improvement_pct': improvement_pct,
+            'p_value': p_value
+        }
     
     def create_summary_report(self, output_dir: Path, timestamp: str, 
                             performance_summary: pd.DataFrame, 
@@ -1172,7 +1576,7 @@ class PredictionAnalyzer:
                 top_significant = significant_pairs.nsmallest(5, 'p_value')
                 for _, row in top_significant.iterrows():
                     f.write(f"- **{row['model1']}** vs **{row['model2']}**: ")
-                    f.write(f"p = {row['p_value']:.4f}, effect size = {row['effect_size']}\n")
+                    f.write(f"p = {row['p_value']:.2f}, effect size = {row['effect_size']}\n")
                 f.write("\n")
             
             # Category analysis
@@ -1186,9 +1590,9 @@ class PredictionAnalyzer:
                     stats = category_stats.loc[category]
                     f.write(f"### {category.title()}\n")
                     f.write(f"- Number of models: {int(stats[('mae_mean', 'count')])}\n")
-                    f.write(f"- Average MAE: {stats[('mae_mean', 'mean')]:.3f} ± {stats[('mae_mean', 'std')]:.3f}\n")
-                    f.write(f"- Best MAE: {stats[('mae_mean', 'min')]:.3f}\n")
-                    f.write(f"- Worst MAE: {stats[('mae_mean', 'max')]:.3f}\n\n")
+                    f.write(f"- Average MAE: {stats[('mae_mean', 'mean')]:.2f} ± {stats[('mae_mean', 'std')]:.2f}\n")
+                    f.write(f"- Best MAE: {stats[('mae_mean', 'min')]:.2f}\n")
+                    f.write(f"- Worst MAE: {stats[('mae_mean', 'max')]:.2f}\n\n")
             
             # Feature importance summary
             f.write("## Advanced Feature Importance Analysis\n\n")
@@ -1217,14 +1621,14 @@ class PredictionAnalyzer:
             f.write("## Recommendations\n\n")
             best_model = performance_summary.iloc[0]
             f.write(f"1. **Best Overall Model**: {best_model['model']} ({best_model['category']})\n")
-            f.write(f"   - MAE: {best_model['mae_mean']:.3f} ± {best_model['mae_std']:.3f}\n")
-            f.write(f"   - RMSE: {best_model['rmse_mean']:.3f}\n")
-            f.write(f"   - R²: {best_model['r2_mean']:.3f}\n\n")
+            f.write(f"   - MAE: {best_model['mae_mean']:.2f} ± {best_model['mae_std']:.2f}\n")
+            f.write(f"   - RMSE: {best_model['rmse_mean']:.2f}\n")
+            f.write(f"   - R²: {best_model['r2_mean']:.2f}\n\n")
             
             # Find most stable model (lowest std)
             stable_model = performance_summary.loc[performance_summary['mae_std'].idxmin()]
             f.write(f"2. **Most Stable Model**: {stable_model['model']} ({stable_model['category']})\n")
-            f.write(f"   - MAE: {stable_model['mae_mean']:.3f} ± {stable_model['mae_std']:.3f}\n")
+            f.write(f"   - MAE: {stable_model['mae_mean']:.2f} ± {stable_model['mae_std']:.2f}\n")
             f.write(f"   - Consistency across folds is highest\n\n")
             
             # Files generated
@@ -1232,7 +1636,7 @@ class PredictionAnalyzer:
             f.write("### Performance Analysis\n")
             f.write("- `model_performance_summary.csv`: Detailed performance metrics\n")
             f.write("- `significance_testing.csv`: Statistical significance test results\n")
-            f.write("- `bootstrap_confidence_intervals.csv`: Bootstrap confidence intervals\n")
+            f.write("- `key_bootstrap_findings.csv`: Category-based bootstrap comparison vs baselines\n")
             f.write("- `predicted_vs_actual.png`: Scatter plots of predictions vs actuals\n")
             f.write("- `error_distributions.png`: Error distribution histograms\n")
             f.write("- `residual_plots.png`: Residual analysis plots\n")
@@ -1403,6 +1807,27 @@ class PredictionAnalyzer:
             lambda row: f"window_{row['window_size']}_{row['architecture']}", axis=1
         )
         
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mean', 'std', 'min', 'max', 'count']
+        for df in [window_aggregation, arch_aggregation, combination_aggregation]:
+            for col in df.columns:
+                if any(nc in col for nc in numerical_columns) and df[col].dtype in ['float64', 'float32']:
+                    df[col] = df[col].round(2)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mean', 'std', 'min', 'max', 'count']
+        for df in [window_aggregation, arch_aggregation, combination_aggregation]:
+            for col in df.columns:
+                if any(nc in col for nc in numerical_columns) and df[col].dtype in ['float64', 'float32']:
+                    df[col] = df[col].round(2)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mean', 'std', 'min', 'max', 'count']
+        for df in [window_aggregation, arch_aggregation, combination_aggregation]:
+            for col in df.columns:
+                if any(nc in col for nc in numerical_columns) and df[col].dtype in ['float64', 'float32']:
+                    df[col] = df[col].round(2)
+        
         # Save aggregated results
         window_aggregation.to_csv(output_dir / f'window_aggregation_{timestamp}.csv', index=False)
         arch_aggregation.to_csv(output_dir / f'architecture_aggregation_{timestamp}.csv', index=False)
@@ -1430,9 +1855,27 @@ class PredictionAnalyzer:
         # Add detailed description
         top_3['description'] = top_3.apply(
             lambda row: f"Window {row['window_size']} + {row['architecture'].title()} "
-                       f"(MAE: {row['mean_mae']:.4f}±{row['std_mae']:.4f}, "
+                       f"(MAE: {row['mean_mae']:.2f}±{row['std_mae']:.2f}, "
                        f"Avg Rank: {row['mean_rank']:.1f})", axis=1
         )
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mean_mae', 'std_mae', 'mean_rank', 'min_mae', 'max_mae']
+        for col in numerical_columns:
+            if col in top_3.columns:
+                top_3[col] = top_3[col].round(2)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mean_mae', 'std_mae', 'mean_rank', 'min_mae', 'max_mae']
+        for col in numerical_columns:
+            if col in top_3.columns:
+                top_3[col] = top_3[col].round(2)
+        
+        # Round numerical columns to 2 decimal places for cleaner CSV output
+        numerical_columns = ['mean_mae', 'std_mae', 'mean_rank', 'min_mae', 'max_mae']
+        for col in numerical_columns:
+            if col in top_3.columns:
+                top_3[col] = top_3[col].round(2)
         
         # Save top combinations
         top_3.to_csv(output_dir / f'top_3_combinations_{timestamp}.csv', index=False)
@@ -1573,17 +2016,17 @@ class PredictionAnalyzer:
             # Print summary
             print(f"📊 Statistical Significance Results:")
             overall_result = significance_results[0]
-            print(f"   Top 3 MAE: {overall_result['top_3_mae_mean']:.4f} ± {overall_result['top_3_mae_std']:.4f}")
-            print(f"   Others MAE: {overall_result['other_mae_mean']:.4f} ± {overall_result['other_mae_std']:.4f}")
-            print(f"   Difference: {overall_result['mae_difference']:.4f}")
-            print(f"   Mann-Whitney p-value: {overall_result['mannwhitney_p_value']:.4f}")
-            print(f"   T-test p-value: {overall_result['ttest_p_value']:.4f}")
-            print(f"   Effect size: {overall_result['effect_size']} (Cohen's d = {overall_result['cohens_d']:.3f})")
+            print(f"   Top 3 MAE: {overall_result['top_3_mae_mean']:.2f} ± {overall_result['top_3_mae_std']:.2f}")
+            print(f"   Others MAE: {overall_result['other_mae_mean']:.2f} ± {overall_result['other_mae_std']:.2f}")
+            print(f"   Difference: {overall_result['mae_difference']:.2f}")
+            print(f"   Mann-Whitney p-value: {overall_result['mannwhitney_p_value']:.2f}")
+            print(f"   T-test p-value: {overall_result['ttest_p_value']:.2f}")
+            print(f"   Effect size: {overall_result['effect_size']} (Cohen's d = {overall_result['cohens_d']:.2f})")
             
             if 'bootstrap_significant' in overall_result:
                 bootstrap_sig = "Yes" if overall_result['bootstrap_significant'] else "No"
                 print(f"   Bootstrap significance: {bootstrap_sig}")
-                print(f"   Bootstrap 95% CI: [{overall_result['bootstrap_ci_lower']:.4f}, {overall_result['bootstrap_ci_upper']:.4f}]")
+                print(f"   Bootstrap 95% CI: [{overall_result['bootstrap_ci_lower']:.2f}, {overall_result['bootstrap_ci_upper']:.2f}]")
         
         return significance_results if significance_results else None
     
@@ -1644,7 +2087,7 @@ class PredictionAnalyzer:
         for bar, mae in zip(bars, top_combinations['mean_mae']):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{mae:.4f}', ha='center', va='bottom', fontweight='bold')
+                    f'{mae:.2f}', ha='center', va='bottom', fontweight='bold')
         
         plt.tight_layout()
         plt.savefig(output_dir / f'window_architecture_analysis_{timestamp}.png', 
@@ -1661,7 +2104,7 @@ class PredictionAnalyzer:
             fig, ax = plt.subplots(figsize=(10, 6))
             
             # Create heatmap
-            sns.heatmap(pivot_data, annot=True, fmt='.4f', cmap='RdYlGn_r', 
+            sns.heatmap(pivot_data, annot=True, fmt='.2f', cmap='RdYlGn_r', 
                        ax=ax, cbar_kws={'label': 'Mean Absolute Error'})
             ax.set_title('Window Size × Architecture Performance Heatmap')
             ax.set_xlabel('Window Size')
@@ -1743,7 +2186,7 @@ def main():
         print(f"\n🏆 KEY FINDINGS:")
         performance_summary = results['performance_summary']
         best_model = performance_summary.iloc[0]
-        print(f"   Best model: {best_model['model']} (MAE: {best_model['mae_mean']:.3f})")
+        print(f"   Best model: {best_model['model']} (MAE: {best_model['mae_mean']:.2f})")
         
         significance_results = results['significance_results']
         n_significant = len(significance_results[significance_results['is_significant']])

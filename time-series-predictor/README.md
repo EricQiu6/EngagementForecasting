@@ -319,8 +319,14 @@ from ..adapters import MyFrameworkAdapter
 ### Basic Usage
 
 ```python
-# Run evaluation with specific schema
-python comprehensive_evaluation.py --schema time_goal
+# Run evaluation with saved predictions (recommended)
+python comprehensive_evaluation_with_saved_predictions.py
+
+# Run analysis on saved results
+python comprehensive_evaluation_analysis.py --results-dir evaluation_outputs/[experiment_name]
+
+# Run complete pipeline with demo
+python run_analysis_demo.py --target-type minutes_per_week --window-size 8
 
 # Available schemas: legacy, student_week, extended, time_goal, time_goal_extended
 

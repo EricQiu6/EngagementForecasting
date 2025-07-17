@@ -157,7 +157,7 @@ def main():
         print(f"   Most significant:")
         best_pair = significant_pairs.loc[significant_pairs['p_value'].idxmin()]
         print(f"   - {best_pair['model1']} vs {best_pair['model2']}")
-        print(f"     p-value: {best_pair['p_value']:.6f}")
+        print(f"     p-value: {best_pair['p_value']:.2f}")
         print(f"     Effect size: {best_pair['effect_size']}")
     
     # File locations
@@ -170,7 +170,7 @@ def main():
     
     print(f"\n✅ Demo completed successfully!")
     print(f"🎯 Best model: {performance_summary.iloc[0]['model']} "
-          f"(MAE: {performance_summary.iloc[0]['mae_mean']:.3f})")
+          f"(MAE: {performance_summary.iloc[0]['mae_mean']:.2f})")
 
 if __name__ == "__main__":
     main()

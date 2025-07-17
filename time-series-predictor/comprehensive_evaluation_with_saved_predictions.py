@@ -15,6 +15,7 @@ import numpy as np
 import json
 import time
 import pickle
+import itertools
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
@@ -150,6 +151,39 @@ class ExperimentConfig:
         self.save_predictions = True
         self.save_models = False  # Set to True to save trained models
         self.save_feature_importance = True
+        
+        # NEW: Hyperparameter sensitivity configurations
+        self.hyperparameter_grids = {
+            'lasso': {
+                'alpha': [0.01, 0.1, 1.0, 10.0],
+                'max_iter': [1000, 5000]
+            },
+            'ridge': {
+                'alpha': [0.1, 1.0, 10.0, 100.0]
+            },
+            'random_forest': {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [5, 10, 15, None],
+                'min_samples_split': [2, 5, 10]
+            },
+            'xgboost': {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [3, 5, 8],
+                'learning_rate': [0.01, 0.1, 0.3]
+            },
+            'mlp': {
+                'hidden_layer_sizes': [(32,), (64,), (64, 32), (128, 64)],
+                'alpha': [0.001, 0.01, 0.1],
+                'learning_rate_init': [0.001, 0.01]
+            }
+        }
+        
+        # NEW: Analysis modes
+        self.analysis_modes = {
+            'single_config': 'Current approach - one config per model',
+            'hyperparameter_sensitivity': 'Multiple configs per model for sensitivity analysis',
+            'both': 'Run both single and multiple configs'
+        }
 
     def get_experiment_name(self, dataset_name: str, goal_type: str, 
                           window_size: int, feature_set: str, 
@@ -456,6 +490,121 @@ def create_all_models() -> Dict[str, Dict[str, Any]]:
     return models
 
 
+def create_models_with_hyperparameters(analysis_mode: str = 'single_config', 
+                                     config_obj = None) -> Dict[str, Dict[str, Any]]:
+    """Create models based on analysis mode with hyperparameter variations."""
+    
+    if config_obj is None:
+        config_obj = DEFAULT_EXPERIMENT_CONFIG
+    
+    if analysis_mode == 'single_config':
+        return create_all_models()  # Current function
+    
+    elif analysis_mode == 'hyperparameter_sensitivity':
+        models = {}
+        
+        # Get baseline models (keep these as single configs)
+        baseline_models = create_all_models()
+        baseline_categories = ['baseline', 'goal_based']
+        
+        for name, config in baseline_models.items():
+            if config['category'] in baseline_categories:
+                models[name] = config
+        
+        # Generate hyperparameter variations for key models
+        for base_model, param_grid in config_obj.hyperparameter_grids.items():
+            if base_model not in param_grid:
+                continue
+                
+            # Generate all combinations of hyperparameters
+            param_names = list(param_grid.keys())
+            param_combinations = list(itertools.product(*param_grid.values()))
+            
+            for i, param_values in enumerate(param_combinations):
+                params = dict(zip(param_names, param_values))
+                model_name = f"{base_model}_hp_{i:02d}"
+                
+                # Create model instance based on base model type
+                try:
+                    if base_model == 'lasso':
+                        model_instance = Lasso(**params, random_state=42)
+                        category = 'linear'
+                    elif base_model == 'ridge':
+                        model_instance = Ridge(**params, random_state=42)
+                        category = 'linear'
+                    elif base_model == 'random_forest':
+                        model_instance = RandomForestRegressor(**params, random_state=42)
+                        category = 'tree'
+                    elif base_model == 'xgboost' and HAS_XGBOOST:
+                        model_instance = XGBRegressor(**params, random_state=42)
+                        category = 'tree'
+                    elif base_model == 'mlp':
+                        mlp_params = {
+                            'activation': 'relu',
+                            'solver': 'adam',
+                            'max_iter': 500,
+                            'early_stopping': True,
+                            'validation_fraction': 0.1,
+                            'n_iter_no_change': 10,
+                            'random_state': 42,
+                            **params
+                        }
+                        model_instance = MLPRegressor(**mlp_params)
+                        category = 'neural'
+                    else:
+                        continue  # Skip if model not available
+                    
+                    models[model_name] = {
+                        'model': model_instance,
+                        'category': category,
+                        'base_model': base_model,
+                        'hyperparams': params,
+                        'description': f'{base_model} ({", ".join(f"{k}={v}" for k, v in params.items())})'
+                    }
+                    
+                except Exception as e:
+                    print(f"Warning: Could not create {model_name} with params {params}: {e}")
+                    continue
+        
+        return models
+    
+    elif analysis_mode == 'both':
+        single_models = create_all_models()
+        hp_models = create_models_with_hyperparameters('hyperparameter_sensitivity', config_obj)
+        
+        # Rename single models to distinguish them
+        renamed_single = {}
+        for name, config in single_models.items():
+            if name in ['lasso', 'ridge', 'random_forest', 'xgboost', 'mlp']:
+                renamed_single[f"{name}_default"] = {
+                    **config,
+                    'base_model': name,
+                    'hyperparams': 'default',
+                    'description': f"{config['description']} (default)"
+                }
+            else:
+                renamed_single[name] = config
+        
+        return {**renamed_single, **hp_models}
+    
+    else:
+        raise ValueError(f"Unknown analysis mode: {analysis_mode}")
+
+
+def get_model_category(base_model: str) -> str:
+    """Get category for a base model."""
+    category_map = {
+        'lasso': 'linear',
+        'ridge': 'linear', 
+        'linear_regression': 'linear',
+        'random_forest': 'tree',
+        'xgboost': 'tree',
+        'mlp': 'neural',
+        'lstm': 'neural'
+    }
+    return category_map.get(base_model, 'unknown')
+
+
 def create_custom_schema_with_features(base_schema: DataSchema, selected_features: List[str]) -> DataSchema:
     """Create a custom schema with only selected features."""
     # Check if these are engineered features (contain underscores suggesting they're generated)
@@ -505,7 +654,8 @@ def create_custom_schema_with_features(base_schema: DataSchema, selected_feature
 
 def run_evaluation_with_predictions(
     experiment_config: Dict[str, Any],
-    config_obj: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG
+    config_obj: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG,
+    analysis_mode: str = 'single_config'
 ):
     """Run comprehensive evaluation with prediction saving using experiment configuration."""
     
@@ -598,13 +748,34 @@ def run_evaluation_with_predictions(
     saver = PredictionSaver(output_dir)
     saver.save_evaluation_config(evaluation_config)
     
-    # Get models based on model set
-    all_models = create_all_models()
-    if model_set == 'all' or config_obj.model_sets[model_set] is None:
-        models = all_models
+    # Get models based on model set and analysis mode
+    if analysis_mode == 'single_config':
+        all_models = create_all_models()
+        if model_set == 'all' or config_obj.model_sets[model_set] is None:
+            models = all_models
+        else:
+            selected_model_names = config_obj.model_sets[model_set]
+            models = {name: all_models[name] for name in selected_model_names if name in all_models}
     else:
-        selected_model_names = config_obj.model_sets[model_set]
-        models = {name: all_models[name] for name in selected_model_names if name in all_models}
+        # Use hyperparameter analysis
+        all_models = create_models_with_hyperparameters(analysis_mode, config_obj)
+        if model_set == 'all' or config_obj.model_sets[model_set] is None:
+            models = all_models
+        else:
+            # Filter hyperparameter models to match model set
+            selected_model_names = config_obj.model_sets[model_set]
+            models = {}
+            
+            # Include baseline/goal-based models as they are
+            for name, config in all_models.items():
+                if name in selected_model_names or config.get('category') in ['baseline', 'goal_based']:
+                    models[name] = config
+                    continue
+                    
+                # Include hyperparameter variants of selected models
+                base_model = config.get('base_model', name)
+                if base_model in selected_model_names:
+                    models[name] = config
     
     if not models:
         print(f"❌ No models available for model set: {model_set}")
@@ -703,7 +874,7 @@ def run_evaluation_with_predictions(
                 'training_time': training_time
             }
             
-            print(f"✅ Completed: MAE={cv_results['mae_mean']:.3f}±{cv_results['mae_std']:.3f}, Time={training_time:.1f}s")
+            print(f"✅ Completed: MAE={cv_results['mae_mean']:.2f}±{cv_results['mae_std']:.2f}, Time={training_time:.1f}s")
             
         except Exception as e:
             print(f"❌ Failed: {str(e)}")
@@ -719,6 +890,26 @@ def run_evaluation_with_predictions(
     results_file = saver.output_dir / 'overall_results.json'
     with open(results_file, 'w') as f:
         json.dump(convert_numpy(overall_results), f, indent=2)
+    
+    # Run hyperparameter sensitivity analysis if applicable
+    if analysis_mode in ['hyperparameter_sensitivity', 'both']:
+        print(f"\n{'='*80}")
+        print("HYPERPARAMETER SENSITIVITY ANALYSIS")
+        print(f"{'='*80}")
+        
+        sensitivity_df = analyze_hyperparameter_sensitivity(results)
+        
+        if not sensitivity_df.empty:
+            # Save sensitivity analysis
+            sensitivity_path = saver.output_dir / 'hyperparameter_sensitivity.csv'
+            sensitivity_df.to_csv(sensitivity_path, index=False)
+            
+            # Print summary
+            print_hyperparameter_sensitivity_summary(sensitivity_df)
+            
+            print(f"\nHyperparameter sensitivity analysis saved to: {sensitivity_path}")
+        else:
+            print("No hyperparameter sensitivity data available (need multiple configs per model).")
     
     print(f"\n{'='*80}")
     print(f"EXPERIMENT COMPLETE: {experiment_name}")
@@ -764,7 +955,7 @@ def print_summary(results: Dict[str, Any]):
     
     for i, (model_name, result) in enumerate(sorted_results, 1):
         print(f"{i:<5} {model_name:<30} {result['category']:<15} "
-              f"{result['mae_mean']:<10.3f} {result['rmse_mean']:<10.3f}")
+              f"{result['mae_mean']:<10.2f} {result['rmse_mean']:<10.2f}")
 
 
 class EngineeredFeatureFilterAdapter:
@@ -817,6 +1008,134 @@ class EngineeredFeatureFilterAdapter:
         return getattr(self.base_adapter, name)
 
 
+def analyze_hyperparameter_sensitivity(results_data: Dict[str, Any]) -> pd.DataFrame:
+    """Analyze hyperparameter sensitivity across model configurations."""
+    
+    print("\n" + "🔍 HYPERPARAMETER SENSITIVITY ANALYSIS")
+    print("=" * 60)
+    
+    sensitivity_results = []
+    
+    # Group results by base model
+    base_models = {}
+    for model_name, result in results_data.items():
+        if 'error' in result:
+            continue  # Skip failed models
+            
+        # Determine base model from name or stored attribute
+        if 'base_model' in result:
+            base_model = result['base_model']
+        elif '_hp_' in model_name:
+            base_model = model_name.split('_hp_')[0]
+        elif '_default' in model_name:
+            base_model = model_name.replace('_default', '')
+        else:
+            # Use full model name as base for single configs
+            base_model = model_name
+        
+        if base_model not in base_models:
+            base_models[base_model] = []
+        base_models[base_model].append((model_name, result))
+    
+    # Compute sensitivity metrics for each base model
+    for base_model, model_results in base_models.items():
+        if len(model_results) < 2:
+            # Need at least 2 configurations for meaningful sensitivity analysis
+            continue
+            
+        mae_values = [result['mae_mean'] for _, result in model_results]
+        rmse_values = [result['rmse_mean'] for _, result in model_results]
+        
+        # Calculate sensitivity metrics
+        mae_mean = np.mean(mae_values)
+        mae_std = np.std(mae_values)
+        mae_range = max(mae_values) - min(mae_values)
+        coefficient_of_variation = mae_std / mae_mean if mae_mean > 0 else 0
+        
+        # Find best and worst configurations
+        best_idx = np.argmin(mae_values)
+        worst_idx = np.argmax(mae_values)
+        best_model, best_result = model_results[best_idx]
+        worst_model, worst_result = model_results[worst_idx]
+        
+        sensitivity_metrics = {
+            'base_model': base_model,
+            'n_configurations': len(mae_values),
+            'mae_mean_across_configs': mae_mean,
+            'mae_std_across_configs': mae_std,
+            'mae_range': mae_range,
+            'coefficient_of_variation': coefficient_of_variation,
+            'best_mae': min(mae_values),
+            'worst_mae': max(mae_values),
+            'sensitivity_ratio': max(mae_values) / min(mae_values) if min(mae_values) > 0 else np.inf,
+            'best_config': best_result.get('hyperparams', 'unknown'),
+            'best_model_name': best_model,
+            'worst_config': worst_result.get('hyperparams', 'unknown'),
+            'worst_model_name': worst_model,
+            'rmse_std_across_configs': np.std(rmse_values)
+        }
+        
+        sensitivity_results.append(sensitivity_metrics)
+    
+    # Create DataFrame and sort by coefficient of variation (lower = more robust)
+    sensitivity_df = pd.DataFrame(sensitivity_results)
+    if not sensitivity_df.empty:
+        sensitivity_df = sensitivity_df.sort_values('coefficient_of_variation')
+        
+        # Round numerical columns
+        numerical_cols = ['mae_mean_across_configs', 'mae_std_across_configs', 'mae_range', 
+                         'coefficient_of_variation', 'best_mae', 'worst_mae', 'sensitivity_ratio',
+                         'rmse_std_across_configs']
+        for col in numerical_cols:
+            if col in sensitivity_df.columns:
+                sensitivity_df[col] = sensitivity_df[col].round(3)
+    
+    return sensitivity_df
+
+
+def print_hyperparameter_sensitivity_summary(sensitivity_df: pd.DataFrame):
+    """Print a summary of hyperparameter sensitivity analysis."""
+    
+    if sensitivity_df.empty:
+        print("No hyperparameter sensitivity data available.")
+        return
+    
+    print("\nHyperparameter Sensitivity Summary:")
+    print("=" * 60)
+    print(f"{'Model':<15} {'Configs':<8} {'CV':<8} {'Range':<8} {'Best MAE':<10}")
+    print("-" * 60)
+    
+    for _, row in sensitivity_df.iterrows():
+        print(f"{row['base_model']:<15} {row['n_configurations']:<8} "
+              f"{row['coefficient_of_variation']:<8.3f} {row['mae_range']:<8.3f} "
+              f"{row['best_mae']:<10.3f}")
+    
+    # Highlight most and least sensitive models
+    if len(sensitivity_df) > 0:
+        most_robust = sensitivity_df.iloc[0]  # Lowest CV
+        least_robust = sensitivity_df.iloc[-1]  # Highest CV
+        
+        print(f"\n🏆 Most Robust Model: {most_robust['base_model']}")
+        print(f"   Coefficient of Variation: {most_robust['coefficient_of_variation']:.3f}")
+        print(f"   Best configuration: {most_robust['best_config']}")
+        
+        print(f"\n⚠️  Most Sensitive Model: {least_robust['base_model']}")
+        print(f"   Coefficient of Variation: {least_robust['coefficient_of_variation']:.3f}")
+        print(f"   Performance range: {least_robust['mae_range']:.3f}")
+        
+        # Overall insights
+        avg_cv = sensitivity_df['coefficient_of_variation'].mean()
+        print(f"\n📊 Overall Insights:")
+        print(f"   Average coefficient of variation: {avg_cv:.3f}")
+        
+        robust_threshold = 0.1  # CV < 0.1 considered robust
+        robust_models = sensitivity_df[sensitivity_df['coefficient_of_variation'] < robust_threshold]
+        print(f"   Models with CV < {robust_threshold}: {len(robust_models)}/{len(sensitivity_df)}")
+        
+        if len(robust_models) > 0:
+            print(f"   Robust models: {', '.join(robust_models['base_model'].tolist())}")
+
+
 def run_ablation_study():
     """Run ablation study with user's specific engineered features."""
     
@@ -861,7 +1180,7 @@ def run_ablation_study():
         
         print(f"\nTop 5 performing models with engineered features:")
         for i, (model_name, result) in enumerate(sorted_results[:5], 1):
-            print(f"{i}. {model_name}: MAE={result['mae_mean']:.3f}±{result['mae_std']:.3f}")
+            print(f"{i}. {model_name}: MAE={result['mae_mean']:.2f}±{result['mae_std']:.2f}")
         
         # Compare with baseline
         baseline_models = ['average_all', 'naive_forecast', 'adams_baseline_50']
@@ -870,13 +1189,13 @@ def run_ablation_study():
         if baseline_results:
             print(f"\nBaseline comparisons:")
             for name, result in baseline_results:
-                print(f"  {name}: MAE={result['mae_mean']:.3f}±{result['mae_std']:.3f}")
+                print(f"  {name}: MAE={result['mae_mean']:.2f}±{result['mae_std']:.2f}")
         
         # Best model improvement
         if sorted_results:
             best_model, best_result = sorted_results[0]
             print(f"\n🏆 Best model: {best_model}")
-            print(f"   MAE: {best_result['mae_mean']:.3f}±{best_result['mae_std']:.3f}")
+            print(f"   MAE: {best_result['mae_mean']:.2f}±{best_result['mae_std']:.2f}")
             
             if baseline_results:
                 baseline_mae = min(r[1]['mae_mean'] for r in baseline_results)

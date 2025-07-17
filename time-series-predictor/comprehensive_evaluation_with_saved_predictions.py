@@ -184,6 +184,39 @@ class ExperimentConfig:
             'hyperparameter_sensitivity': 'Multiple configs per model for sensitivity analysis',
             'both': 'Run both single and multiple configs'
         }
+        
+        # NEW: Hyperparameter sensitivity configurations
+        self.hyperparameter_grids = {
+            'lasso': {
+                'alpha': [0.01, 0.1, 1.0, 10.0],
+                'max_iter': [1000, 5000]
+            },
+            'ridge': {
+                'alpha': [0.1, 1.0, 10.0, 100.0]
+            },
+            'random_forest': {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [5, 10, 15, None],
+                'min_samples_split': [2, 5, 10]
+            },
+            'xgboost': {
+                'n_estimators': [50, 100, 200],
+                'max_depth': [3, 5, 8],
+                'learning_rate': [0.01, 0.1, 0.3]
+            },
+            'mlp': {
+                'hidden_layer_sizes': [(32,), (64,), (64, 32), (128, 64)],
+                'alpha': [0.001, 0.01, 0.1],
+                'learning_rate_init': [0.001, 0.01]
+            }
+        }
+        
+        # NEW: Analysis modes
+        self.analysis_modes = {
+            'single_config': 'Current approach - one config per model',
+            'hyperparameter_sensitivity': 'Multiple configs per model for sensitivity analysis',
+            'both': 'Run both single and multiple configs'
+        }
 
     def get_experiment_name(self, dataset_name: str, goal_type: str, 
                           window_size: int, feature_set: str, 
@@ -890,6 +923,26 @@ def run_evaluation_with_predictions(
     results_file = saver.output_dir / 'overall_results.json'
     with open(results_file, 'w') as f:
         json.dump(convert_numpy(overall_results), f, indent=2)
+    
+    # Run hyperparameter sensitivity analysis if applicable
+    if analysis_mode in ['hyperparameter_sensitivity', 'both']:
+        print(f"\n{'='*80}")
+        print("HYPERPARAMETER SENSITIVITY ANALYSIS")
+        print(f"{'='*80}")
+        
+        sensitivity_df = analyze_hyperparameter_sensitivity(results)
+        
+        if not sensitivity_df.empty:
+            # Save sensitivity analysis
+            sensitivity_path = saver.output_dir / 'hyperparameter_sensitivity.csv'
+            sensitivity_df.to_csv(sensitivity_path, index=False)
+            
+            # Print summary
+            print_hyperparameter_sensitivity_summary(sensitivity_df)
+            
+            print(f"\nHyperparameter sensitivity analysis saved to: {sensitivity_path}")
+        else:
+            print("No hyperparameter sensitivity data available (need multiple configs per model).")
     
     # Run hyperparameter sensitivity analysis if applicable
     if analysis_mode in ['hyperparameter_sensitivity', 'both']:

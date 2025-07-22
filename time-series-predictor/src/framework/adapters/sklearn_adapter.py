@@ -120,6 +120,23 @@ class SKLearnAdapter(TimeSeriesModel):
                 'has_recent_gap', 'weeks_since_last_gap', 'gap_count'
             ])
             
+        # 7. Class-level features
+        if 'avg_proficiency' in self.feature_map:
+            feature_names.extend([
+                'performance_vs_class_mean_prof', 'class_percentile_rank_prof', 'class_improvement_trend_prof'
+            ])
+        
+        if 'minutes_per_week' in self.feature_map:
+            feature_names.extend([
+                'performance_vs_class_mean_mins', 'class_percentile_rank_mins', 'class_improvement_trend_mins'
+            ])
+        
+        # 8. Prior achievement features
+        if 'avg_proficiency' in self.feature_map:
+            feature_names.extend([
+                'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'
+            ])
+            
         return feature_names
     
     def _pass_feature_metadata(self):
@@ -465,7 +482,280 @@ class SKLearnAdapter(TimeSeriesModel):
             gap_array = np.column_stack(gap_features)
             feature_list.append(gap_array)
         
-        # 7. Combine all features
+        # 7. CLASS-LEVEL FEATURES (for both avg_proficiency and minutes_per_week)
+        class_features = []
+        
+        # CRITICAL: Only calculate class features if we have sufficient batch size
+        # Small batches (< 10 samples) make class statistics meaningless and numerically unstable
+        MIN_BATCH_SIZE_FOR_CLASS_FEATURES = 10
+        
+        if batch_size >= MIN_BATCH_SIZE_FOR_CLASS_FEATURES:
+            # Get the full dataset to calculate class statistics
+            # Note: This assumes we can access the full DataLoader dataset
+            # For now, we'll calculate class stats from the current batch
+            # In production, this would need access to the full training set
+            
+            # Class features for avg_proficiency
+            if 'avg_proficiency' in self.feature_map:
+                proficiency_idx = self.feature_map['avg_proficiency']
+                current_proficiency = X_all[:, -1, proficiency_idx]  # Current week proficiency
+                
+                # Class mean proficiency (approximated from current batch)
+                class_mean_proficiency = np.mean(current_proficiency)
+                performance_vs_class_mean_prof = current_proficiency - class_mean_proficiency
+                # Handle NaN/inf values
+                performance_vs_class_mean_prof = np.nan_to_num(performance_vs_class_mean_prof, nan=0.0, posinf=0.0, neginf=0.0)
+                class_features.append(performance_vs_class_mean_prof)
+                
+                # Class percentile rank for proficiency
+                try:
+                    from scipy.stats import rankdata
+                    if len(current_proficiency) > 1:
+                        percentile_rank_prof = rankdata(current_proficiency, method='average') / len(current_proficiency) * 100
+                        percentile_rank_prof = np.nan_to_num(percentile_rank_prof, nan=50.0, posinf=100.0, neginf=0.0)
+                    else:
+                        percentile_rank_prof = np.full(batch_size, 50.0)  # Default to median
+                    class_features.append(percentile_rank_prof)
+                except:
+                    # Fallback if scipy fails
+                    class_features.append(np.full(batch_size, 50.0))
+                
+                # Class improvement trend for proficiency (using available sequence data)
+                if seq_len >= 3:
+                    try:
+                        all_prof_values = X_all[:, :, proficiency_idx]  # All timesteps
+                        batch_means_over_time = np.mean(all_prof_values, axis=0)  # Mean across students for each timestep
+                        # Calculate trend slope with error handling
+                        x_trend = np.arange(len(batch_means_over_time))
+                        
+                        # Check for valid data
+                        if len(batch_means_over_time) >= 2 and not np.all(np.isnan(batch_means_over_time)):
+                            # Remove NaN values
+                            valid_mask = ~np.isnan(batch_means_over_time)
+                            if np.sum(valid_mask) >= 2:
+                                x_valid = x_trend[valid_mask]
+                                y_valid = batch_means_over_time[valid_mask]
+                                class_trend_prof = np.polyfit(x_valid, y_valid, 1)[0]
+                                class_trend_prof = np.nan_to_num(class_trend_prof, nan=0.0, posinf=0.0, neginf=0.0)
+                            else:
+                                class_trend_prof = 0.0
+                        else:
+                            class_trend_prof = 0.0
+                            
+                        class_trend_prof_array = np.full(batch_size, class_trend_prof)
+                        class_features.append(class_trend_prof_array)
+                    except:
+                        # Fallback to zero trend if calculation fails
+                        class_features.append(np.zeros(batch_size))
+                else:
+                    class_features.append(np.zeros(batch_size))
+            
+            # Class features for minutes_per_week
+            if 'minutes_per_week' in self.feature_map:
+                minutes_idx = self.feature_map['minutes_per_week']
+                current_minutes = X_all[:, -1, minutes_idx]  # Current week minutes
+                
+                # Class mean minutes (approximated from current batch)
+                class_mean_minutes = np.mean(current_minutes)
+                performance_vs_class_mean_mins = current_minutes - class_mean_minutes
+                # Handle NaN/inf values
+                performance_vs_class_mean_mins = np.nan_to_num(performance_vs_class_mean_mins, nan=0.0, posinf=0.0, neginf=0.0)
+                class_features.append(performance_vs_class_mean_mins)
+                
+                # Class percentile rank for minutes
+                try:
+                    if len(current_minutes) > 1:
+                        percentile_rank_mins = rankdata(current_minutes, method='average') / len(current_minutes) * 100
+                        percentile_rank_mins = np.nan_to_num(percentile_rank_mins, nan=50.0, posinf=100.0, neginf=0.0)
+                    else:
+                        percentile_rank_mins = np.full(batch_size, 50.0)  # Default to median
+                    class_features.append(percentile_rank_mins)
+                except:
+                    # Fallback if calculation fails
+                    class_features.append(np.full(batch_size, 50.0))
+                
+                # Class improvement trend for minutes (using available sequence data)
+                if seq_len >= 3:
+                    try:
+                        all_mins_values = X_all[:, :, minutes_idx]  # All timesteps
+                        batch_means_over_time = np.mean(all_mins_values, axis=0)  # Mean across students for each timestep
+                        # Calculate trend slope with error handling
+                        x_trend = np.arange(len(batch_means_over_time))
+                        
+                        # Check for valid data
+                        if len(batch_means_over_time) >= 2 and not np.all(np.isnan(batch_means_over_time)):
+                            # Remove NaN values
+                            valid_mask = ~np.isnan(batch_means_over_time)
+                            if np.sum(valid_mask) >= 2:
+                                x_valid = x_trend[valid_mask]
+                                y_valid = batch_means_over_time[valid_mask]
+                                class_trend_mins = np.polyfit(x_valid, y_valid, 1)[0]
+                                class_trend_mins = np.nan_to_num(class_trend_mins, nan=0.0, posinf=0.0, neginf=0.0)
+                            else:
+                                class_trend_mins = 0.0
+                        else:
+                            class_trend_mins = 0.0
+                            
+                        class_trend_mins_array = np.full(batch_size, class_trend_mins)
+                        class_features.append(class_trend_mins_array)
+                    except:
+                        # Fallback to zero trend if calculation fails
+                        class_features.append(np.zeros(batch_size))
+                else:
+                    class_features.append(np.zeros(batch_size))
+        
+        else:
+            # FALLBACK: For small batches, use default class feature values
+            # This prevents numerical instability with tiny fold sizes
+            n_class_features = 0
+            
+            if 'avg_proficiency' in self.feature_map:
+                n_class_features += 3  # performance_vs_class_mean_prof, percentile_rank_prof, class_trend_prof
+            
+            if 'minutes_per_week' in self.feature_map:
+                n_class_features += 3  # performance_vs_class_mean_mins, percentile_rank_mins, class_trend_mins
+            
+            if n_class_features > 0:
+                # Create default class features (all zeros/neutral values)
+                default_class_features = []
+                
+                if 'avg_proficiency' in self.feature_map:
+                    default_class_features.append(np.zeros(batch_size))  # performance_vs_class_mean_prof
+                    default_class_features.append(np.full(batch_size, 50.0))  # percentile_rank_prof (median)
+                    default_class_features.append(np.zeros(batch_size))  # class_trend_prof
+                
+                if 'minutes_per_week' in self.feature_map:
+                    default_class_features.append(np.zeros(batch_size))  # performance_vs_class_mean_mins
+                    default_class_features.append(np.full(batch_size, 50.0))  # percentile_rank_mins (median)
+                    default_class_features.append(np.zeros(batch_size))  # class_trend_mins
+                
+                class_features.extend(default_class_features)
+        
+        if class_features:
+            class_array = np.column_stack(class_features)
+            # Additional safety check for the entire class array
+            class_array = np.nan_to_num(class_array, nan=0.0, posinf=0.0, neginf=0.0)
+            feature_list.append(class_array)
+        
+        # 8. PRIOR ACHIEVEMENT FEATURES
+        prior_achievement_features = []
+        
+        # 1. Starting ability quartile - careful handling of first 2 weeks
+        if 'avg_proficiency' in self.feature_map and seq_len >= 2:
+            proficiency_idx = self.feature_map['avg_proficiency']
+            
+            # Use first 2 weeks of data to establish baseline
+            early_weeks = min(2, seq_len)
+            early_proficiency = X_all[:, :early_weeks, proficiency_idx]  # First 1-2 weeks
+            early_avg = np.mean(early_proficiency, axis=1)  # Average over early weeks
+            
+            # Handle NaN values in early_avg
+            early_avg = np.nan_to_num(early_avg, nan=0.5)  # Default to middle proficiency
+            
+            # Calculate quartiles from the current batch (approximation)
+            try:
+                if len(early_avg) > 4:  # Need at least 4 samples for reliable quartiles
+                    quartile_25 = np.percentile(early_avg, 25)
+                    quartile_50 = np.percentile(early_avg, 50)
+                    quartile_75 = np.percentile(early_avg, 75)
+                else:
+                    # Use fixed quartiles if too few samples
+                    quartile_25 = 0.25
+                    quartile_50 = 0.5
+                    quartile_75 = 0.75
+                
+                # Assign quartile (1-4)
+                starting_ability_quartile = np.ones(batch_size)
+                starting_ability_quartile[early_avg > quartile_25] = 2
+                starting_ability_quartile[early_avg > quartile_50] = 3
+                starting_ability_quartile[early_avg > quartile_75] = 4
+                
+                prior_achievement_features.append(starting_ability_quartile)
+            except:
+                # Fallback to quartile 2 (average) if calculation fails
+                prior_achievement_features.append(np.full(batch_size, 2.0))
+        elif seq_len < 2:
+            # For very early weeks, use current performance as proxy
+            if 'avg_proficiency' in self.feature_map:
+                proficiency_idx = self.feature_map['avg_proficiency']
+                current_proficiency = X_all[:, -1, proficiency_idx]
+                # Assign quartile 2 as default (average) for new students
+                starting_ability_quartile = np.full(batch_size, 2.0)
+                prior_achievement_features.append(starting_ability_quartile)
+        
+        # 2. Performance consistency score
+        if 'avg_proficiency' in self.feature_map and seq_len >= 3:
+            proficiency_idx = self.feature_map['avg_proficiency']
+            all_proficiency = X_all[:, :, proficiency_idx]
+            
+            # Calculate standard deviation across time for each student
+            proficiency_std = np.std(all_proficiency, axis=1)
+            # Handle NaN and very small values
+            proficiency_std = np.nan_to_num(proficiency_std, nan=0.1)  # Default std
+            proficiency_std = np.maximum(proficiency_std, 1e-8)  # Avoid division by zero
+            
+            # Consistency score: higher is more consistent
+            consistency_score = 1.0 / (1.0 + proficiency_std)
+            consistency_score = np.nan_to_num(consistency_score, nan=0.5)  # Default consistency
+            consistency_score = np.clip(consistency_score, 0.0, 1.0)  # Ensure valid range
+            
+            prior_achievement_features.append(consistency_score)
+        elif seq_len < 3:
+            # Default consistency for new students
+            consistency_score = np.full(batch_size, 0.5)  # Medium consistency
+            prior_achievement_features.append(consistency_score)
+        
+        # 3. Learning acceleration capacity - max improvement over any 3-week window
+        if 'avg_proficiency' in self.feature_map and seq_len >= 3:
+            proficiency_idx = self.feature_map['avg_proficiency']
+            all_proficiency = X_all[:, :, proficiency_idx]
+            
+            max_acceleration = np.zeros(batch_size)
+            for i in range(batch_size):
+                try:
+                    student_prof = all_proficiency[i]
+                    # Handle NaN values
+                    student_prof = np.nan_to_num(student_prof, nan=0.0)
+                    
+                    max_accel = 0.0
+                    
+                    # Check all possible 3-week windows
+                    for window_start in range(len(student_prof) - 2):
+                        window_improvement = student_prof[window_start + 2] - student_prof[window_start]
+                        window_improvement = np.nan_to_num(window_improvement, nan=0.0)
+                        max_accel = max(max_accel, window_improvement)
+                    
+                    max_acceleration[i] = max_accel
+                except:
+                    max_acceleration[i] = 0.0  # Fallback
+            
+            # Ensure valid range
+            max_acceleration = np.nan_to_num(max_acceleration, nan=0.0)
+            max_acceleration = np.clip(max_acceleration, -1.0, 1.0)  # Reasonable bounds
+            
+            prior_achievement_features.append(max_acceleration)
+        elif seq_len < 3:
+            # For early weeks, use current trend as proxy
+            if 'avg_proficiency' in self.feature_map and seq_len >= 2:
+                proficiency_idx = self.feature_map['avg_proficiency']
+                values = X_all[:, :, proficiency_idx]
+                # Simple improvement: last - first
+                improvement = values[:, -1] - values[:, 0]
+                improvement = np.nan_to_num(improvement, nan=0.0)
+                improvement = np.clip(improvement, -1.0, 1.0)  # Reasonable bounds
+                prior_achievement_features.append(improvement)
+            else:
+                # Default for very new students
+                default_acceleration = np.zeros(batch_size)
+                prior_achievement_features.append(default_acceleration)
+        
+        if prior_achievement_features:
+            prior_achievement_array = np.column_stack(prior_achievement_features)
+            # Additional safety check for the entire prior achievement array
+            prior_achievement_array = np.nan_to_num(prior_achievement_array, nan=0.0, posinf=0.0, neginf=0.0)
+            feature_list.append(prior_achievement_array)
+        
+        # 9. Combine all features
         X_processed = np.hstack(feature_list)
         
         return X_processed

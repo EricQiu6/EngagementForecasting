@@ -733,8 +733,13 @@ class PredictionAnalyzer:
         # Create feature importance analysis
         self._create_feature_importance_analysis(df_importance, output_dir, timestamp)
         
-        # Focus on specific features of interest
-        specific_features = ['student_learning_rate', 'student_ability', 'avg_difficulty']
+        # Focus on specific features of interest (including new class-level and prior achievement features)
+        specific_features = [
+            'student_learning_rate', 'student_ability', 'avg_difficulty',  # Original key features
+            'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
+            'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
+            'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
+        ]
         self._analyze_specific_features(df_importance, specific_features, output_dir, timestamp)
         
         print(f"✅ Feature importance analysis completed")
@@ -879,8 +884,11 @@ class PredictionAnalyzer:
         # Create the plot
         fig, ax = plt.subplots(figsize=(12, 10))
         
-        # Highlight specific features of interest
-        specific_features = ['student_learning_rate', 'student_ability', 'avg_difficulty']
+        # Highlight specific features of interest (including new features)
+        specific_features = [
+            'student_learning_rate', 'student_ability', 'avg_difficulty',
+            'performance_vs_class_mean', 'class_percentile_rank', 'starting_ability_quartile'
+        ]
         
         # Create color map for y-axis labels
         feature_colors = []
@@ -929,8 +937,12 @@ class PredictionAnalyzer:
     def _create_feature_comparison_charts(self, df_importance: pd.DataFrame, output_dir: Path, timestamp: str):
         """Create bar charts comparing feature importance across models."""
         
-        # Focus on key features
-        specific_features = ['student_learning_rate', 'student_ability', 'avg_difficulty']
+        # Focus on key features (including new class-level and prior achievement features)
+        specific_features = [
+            'student_learning_rate', 'student_ability', 'avg_difficulty',  # Original key features
+            'performance_vs_class_mean', 'class_percentile_rank',  # Class comparison features
+            'starting_ability_quartile', 'performance_consistency_score'  # Prior achievement features
+        ]
         
         # Find features that contain our key terms
         key_feature_data = []
@@ -1002,6 +1014,8 @@ class PredictionAnalyzer:
             'Gap': [],
             'Goal': [],
             'Student': [],
+            'Class_Peer': [],     # NEW: Class-level and peer comparison features
+            'Prior_Achievement': [], # NEW: Prior achievement and baseline features
             'Interaction': []
         }
         
@@ -1023,6 +1037,10 @@ class PredictionAnalyzer:
                 categories['Goal'].append(feature)
             elif any(student_term in feature_lower for student_term in ['student', 'ability', 'learning_rate']):
                 categories['Student'].append(feature)
+            elif any(class_term in feature_lower for class_term in ['class', 'percentile', 'performance_vs']):
+                categories['Class_Peer'].append(feature)  # NEW: Class/peer features
+            elif any(prior_term in feature_lower for prior_term in ['starting', 'consistency', 'acceleration_capacity', 'quartile']):
+                categories['Prior_Achievement'].append(feature)  # NEW: Prior achievement features
             elif 'x' in feature or '_*_' in feature:
                 categories['Interaction'].append(feature)
         
@@ -1180,7 +1198,11 @@ class PredictionAnalyzer:
         
         # Create summary
         summary_data = []
-        specific_features = ['student_learning_rate', 'student_ability', 'avg_difficulty']
+        specific_features = [
+            'student_learning_rate', 'student_ability', 'avg_difficulty',  # Original key features
+            'performance_vs_class_mean', 'class_percentile_rank',  # Class comparison features  
+            'starting_ability_quartile'  # Prior achievement features
+        ]
         
         for model, top_features in model_top_features.items():
             # Count feature types in top 5
@@ -1197,6 +1219,17 @@ class PredictionAnalyzer:
             has_student_ability = any('student_ability' in f for f in top_features)
             has_avg_difficulty = any('avg_difficulty' in f for f in top_features)
             
+            # Check for new class-level and prior achievement features
+            has_class_comparison = any('performance_vs_class_mean' in f for f in top_features)
+            has_peer_ranking = any('class_percentile_rank' in f for f in top_features)
+            has_starting_ability = any('starting_ability_quartile' in f for f in top_features)
+            
+            # Count new feature types
+            class_peer_count = sum(1 for f in top_features if any(term in f.lower() 
+                                 for term in ['class', 'percentile', 'performance_vs']))
+            prior_achievement_count = sum(1 for f in top_features if any(term in f.lower() 
+                                        for term in ['starting', 'consistency', 'acceleration_capacity', 'quartile']))
+            
             summary_data.append({
                 'model': model,
                 'current_features': current_count,
@@ -1204,9 +1237,14 @@ class PredictionAnalyzer:
                 'statistical_features': stat_count,
                 'gap_features': gap_count,
                 'student_features': student_count,
+                'class_peer_features': class_peer_count,  # NEW
+                'prior_achievement_features': prior_achievement_count,  # NEW
                 'has_student_learning_rate': has_student_lr,
                 'has_student_ability': has_student_ability,
                 'has_avg_difficulty': has_avg_difficulty,
+                'has_class_comparison': has_class_comparison,  # NEW
+                'has_peer_ranking': has_peer_ranking,  # NEW
+                'has_starting_ability': has_starting_ability,  # NEW
                 'top_5_features': ', '.join(top_features)
             })
         
@@ -1260,11 +1298,28 @@ class PredictionAnalyzer:
             print("⚠️  No data found for specific features")
     
     def _create_specific_features_plot(self, df_specific: pd.DataFrame, output_dir: Path, timestamp: str):
-        """Create plot focusing on the three specific features."""
-        
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        """Create plot focusing on the specific features."""
         
         target_features = df_specific['target_feature'].unique()
+        n_features = len(target_features)
+        
+        if n_features == 0:
+            print("⚠️  No specific features found for plotting")
+            return
+        
+        # Calculate grid dimensions
+        n_cols = min(3, n_features)  # Max 3 columns
+        n_rows = (n_features + n_cols - 1) // n_cols  # Ceiling division
+        
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))
+        
+        # Handle single subplot case
+        if n_features == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes if n_cols > 1 else [axes]
+        else:
+            axes = axes.flatten()
         
         for i, target_feature in enumerate(target_features):
             ax = axes[i]
@@ -1289,6 +1344,12 @@ class PredictionAnalyzer:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
                         f'{importance:.2f}', ha='center', va='bottom', fontsize=8)
+        
+        # Hide unused subplots
+        total_subplots = n_rows * n_cols
+        for i in range(n_features, total_subplots):
+            if i < len(axes):
+                axes[i].set_visible(False)
         
         plt.tight_layout()
         plt.savefig(output_dir / f'specific_features_importance_{timestamp}.png', dpi=300, bbox_inches='tight')
@@ -1663,3 +1724,211 @@ class PredictionAnalyzer:
             f.write("- `combination_heatmap.png`: Window×Architecture performance heatmap\n")
         
         print(f"📋 Summary report saved to: {report_path}")
+    
+    def analyze_window_architecture_combinations(self, output_dir: Path, timestamp: str) -> pd.DataFrame:
+        """Analyze window size and architecture combinations."""
+        print("Analyzing window size and architecture combinations...")
+        
+        # Extract window and architecture info from model names and results
+        combination_data = []
+        
+        for model_name in self.prediction_df['model'].unique():
+            model_data = self.prediction_df[self.prediction_df['model'] == model_name]
+            
+            # Calculate performance metrics
+            mae = np.mean(model_data['error'].values)
+            rmse = np.sqrt(np.mean(model_data['squared_error'].values))
+            
+            # Try to extract window size from model name or results
+            window_size = 'unknown'
+            if hasattr(self, 'evaluation_config') and 'window_size' in self.evaluation_config:
+                window_size = self.evaluation_config['window_size']
+            
+            # Determine architecture type
+            architecture = 'other'
+            model_lower = model_name.lower()
+            
+            if any(term in model_lower for term in ['linear', 'ridge', 'lasso', 'elastic']):
+                architecture = 'linear'
+            elif any(term in model_lower for term in ['forest', 'tree', 'xgb', 'gradient']):
+                architecture = 'tree'
+            elif any(term in model_lower for term in ['mlp', 'lstm', 'neural', 'dlinear']):
+                architecture = 'neural'
+            elif any(term in model_lower for term in ['mixed', 'hierarchical']):
+                architecture = 'mixed_effects'
+            elif any(term in model_lower for term in ['baseline', 'naive', 'mean', 'median']):
+                architecture = 'baseline'
+            
+            combination_data.append({
+                'model': model_name,
+                'window_size': window_size,
+                'architecture': architecture,
+                'mae': mae,
+                'rmse': rmse,
+                'n_predictions': len(model_data)
+            })
+        
+        combination_df = pd.DataFrame(combination_data)
+        
+        # Save the analysis
+        combination_df.to_csv(output_dir / f'window_architecture_analysis_{timestamp}.csv', index=False)
+        
+        # Create aggregated summaries
+        if len(combination_df) > 1:
+            # Aggregate by architecture
+            arch_summary = combination_df.groupby('architecture').agg({
+                'mae': ['mean', 'std', 'min', 'max', 'count']
+            }).round(3)
+            arch_summary.to_csv(output_dir / f'architecture_aggregation_{timestamp}.csv')
+            
+            # If we have multiple window sizes, aggregate by window
+            if len(combination_df['window_size'].unique()) > 1:
+                window_summary = combination_df.groupby('window_size').agg({
+                    'mae': ['mean', 'std', 'min', 'max', 'count']
+                }).round(3)
+                window_summary.to_csv(output_dir / f'window_aggregation_{timestamp}.csv')
+        
+        print(f"✅ Window and architecture analysis saved")
+        return combination_df
+    
+    def _analyze_feature_consistency(self, df_importance: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Analyze feature consistency across models (migrated from feature_importance_analysis.py)."""
+        
+        print("Analyzing feature consistency across models...")
+        
+        # Calculate consistency metrics for each feature
+        feature_consistency = []
+        
+        features = df_importance['feature'].unique()
+        models = df_importance['model'].unique()
+        
+        for feature in features:
+            feature_data = df_importance[df_importance['feature'] == feature]
+            
+            if len(feature_data) > 1:  # Feature appears in multiple models
+                importances = feature_data['importance'].values
+                
+                # Calculate consistency metrics
+                mean_importance = np.mean(importances)
+                std_importance = np.std(importances)
+                cv = std_importance / mean_importance if mean_importance > 0 else float('inf')
+                min_importance = np.min(importances)
+                max_importance = np.max(importances)
+                range_importance = max_importance - min_importance
+                
+                # How many models have this feature in top 10?
+                models_with_feature = len(feature_data)
+                
+                # Calculate average rank across models (if we can determine it)
+                avg_rank = None
+                ranks = []
+                for model in feature_data['model'].unique():
+                    model_all_features = df_importance[df_importance['model'] == model]
+                    sorted_features = model_all_features.sort_values('importance', ascending=False)
+                    feature_rank = sorted_features.index[sorted_features['feature'] == feature].tolist()
+                    if feature_rank:
+                        ranks.append(feature_rank[0] + 1)  # 1-indexed rank
+                
+                if ranks:
+                    avg_rank = np.mean(ranks)
+                
+                feature_consistency.append({
+                    'feature': feature,
+                    'n_models': models_with_feature,
+                    'mean_importance': mean_importance,
+                    'std_importance': std_importance,
+                    'coefficient_of_variation': cv,
+                    'min_importance': min_importance,
+                    'max_importance': max_importance,
+                    'range_importance': range_importance,
+                    'avg_rank': avg_rank,
+                    'consistency_score': 1 / (1 + cv) if cv != float('inf') else 0
+                })
+        
+        # Convert to DataFrame and save
+        df_consistency = pd.DataFrame(feature_consistency)
+        
+        if len(df_consistency) > 0:
+            df_consistency = df_consistency.sort_values('consistency_score', ascending=False)
+            
+            # Round numerical columns to 2 decimal places for cleaner CSV output
+            numerical_columns = ['mean_importance', 'std_importance', 'coefficient_of_variation', 
+                               'min_importance', 'max_importance', 'range_importance', 'avg_rank', 'consistency_score']
+            for col in numerical_columns:
+                if col in df_consistency.columns:
+                    df_consistency[col] = df_consistency[col].round(2)
+            
+            df_consistency.to_csv(output_dir / f'feature_consistency_analysis_{timestamp}.csv', index=False)
+            
+            # Create visualization
+            self._create_feature_consistency_plot(df_consistency, output_dir, timestamp)
+            
+            print(f"📊 Feature consistency analysis completed: {len(df_consistency)} features analyzed")
+        else:
+            print("⚠️  No features found for consistency analysis")
+    
+    def _create_feature_consistency_plot(self, df_consistency: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Create visualization for feature consistency analysis."""
+        
+        if len(df_consistency) == 0:
+            return
+        
+        # Get top 15 most consistent features
+        top_consistent = df_consistency.head(15)
+        
+        fig, axes = plt.subplots(1, 2, figsize=(15, 8))
+        
+        # 1. Consistency score ranking
+        ax1 = axes[0]
+        y_pos = np.arange(len(top_consistent))
+        consistency_scores = top_consistent['consistency_score'].values
+        
+        # Color bars based on consistency level
+        colors = ['darkgreen' if score > 0.8 else 'green' if score > 0.6 else 
+                 'orange' if score > 0.4 else 'red' for score in consistency_scores]
+        
+        bars = ax1.barh(y_pos, consistency_scores, color=colors, alpha=0.7)
+        
+        ax1.set_yticks(y_pos)
+        ax1.set_yticklabels(top_consistent['feature'].values)
+        ax1.set_xlabel('Consistency Score (Higher = More Consistent)')
+        ax1.set_title('Top 15 Most Consistent Features Across Models')
+        ax1.grid(True, alpha=0.3)
+        
+        # Add value labels
+        for i, (bar, score) in enumerate(zip(bars, consistency_scores)):
+            width = bar.get_width()
+            ax1.text(width + 0.01, bar.get_y() + bar.get_height()/2, 
+                    f'{score:.2f}', ha='left', va='center', fontsize=8)
+        
+        # 2. Mean importance vs consistency
+        ax2 = axes[1]
+        
+        x = df_consistency['mean_importance'].values
+        y = df_consistency['consistency_score'].values
+        
+        # Color points based on number of models
+        colors = df_consistency['n_models'].values
+        
+        scatter = ax2.scatter(x, y, c=colors, cmap='viridis', alpha=0.7, s=50)
+        
+        ax2.set_xlabel('Mean Importance')
+        ax2.set_ylabel('Consistency Score')
+        ax2.set_title('Feature Importance vs Consistency')
+        ax2.grid(True, alpha=0.3)
+        
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax2)
+        cbar.set_label('Number of Models')
+        
+        # Annotate some interesting points
+        for idx, row in df_consistency.head(5).iterrows():
+            ax2.annotate(row['feature'][:20] + '...' if len(row['feature']) > 20 else row['feature'], 
+                        (row['mean_importance'], row['consistency_score']),
+                        xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.8)
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / f'feature_consistency_analysis_{timestamp}.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"📊 Feature consistency visualization saved")

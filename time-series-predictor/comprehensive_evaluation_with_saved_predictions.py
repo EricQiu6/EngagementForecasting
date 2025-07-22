@@ -147,7 +147,7 @@ class ExperimentConfig:
         }
         
         # Output configurations
-        self.output_base_dir = 'evaluation_outputs_with_features'
+        self.output_base_dir = 'evaluation_outputs_after_milestone_2_single_config_with_features'
         self.save_predictions = True
         self.save_models = False  # Set to True to save trained models
         self.save_feature_importance = True
@@ -308,7 +308,8 @@ class PredictionSaver:
             json.dump(fold_data, f, indent=2)
             
     def save_model_summary(self, model_name: str, cv_results: Dict[str, Any], 
-                         model_config: Dict[str, Any], training_time: float):
+                         model_config: Dict[str, Any], training_time: float, 
+                         feature_importance: Dict[str, Any] = None):
         """Save overall model results and configuration."""
         # Create serializable version of model_config
         serializable_config = {}
@@ -330,6 +331,10 @@ class PredictionSaver:
             'training_time': training_time
         }
         
+        # Add feature importance if available
+        if feature_importance:
+            summary['feature_importance'] = convert_numpy(feature_importance)
+        
         model_dir = self.output_dir / model_name
         model_dir.mkdir(parents=True, exist_ok=True)
         
@@ -350,9 +355,47 @@ class ExtendedCrossValidator(CrossValidator):
         self.prediction_saver = prediction_saver
         self.model_name = model_name
         
+    def _extract_feature_importance(self, model) -> Dict[str, float]:
+        """Extract feature importance from fitted model if available."""
+        feature_importance = {}
+        
+        try:
+            # For SKLearn adapter models
+            if hasattr(model, 'sklearn_model'):
+                sklearn_model = model.sklearn_model
+                feature_names = model.get_feature_names() if hasattr(model, 'get_feature_names') else None
+                
+                # Tree-based models (Random Forest, XGBoost, etc.)
+                if hasattr(sklearn_model, 'feature_importances_'):
+                    importances = sklearn_model.feature_importances_
+                    
+                    if feature_names and len(feature_names) == len(importances):
+                        for feat_name, importance in zip(feature_names, importances):
+                            feature_importance[feat_name] = float(importance)
+                
+                # Linear models (Lasso, Ridge, Linear Regression)
+                elif hasattr(sklearn_model, 'coef_'):
+                    coefficients = sklearn_model.coef_
+                    
+                    # Handle 1D and 2D coefficient arrays
+                    if coefficients.ndim > 1:
+                        coefficients = coefficients.flatten()
+                    
+                    if feature_names and len(feature_names) == len(coefficients):
+                        for feat_name, coef in zip(feature_names, coefficients):
+                            # Use absolute value of coefficients as importance
+                            feature_importance[feat_name] = float(abs(coef))
+                            
+        except Exception as e:
+            # If feature importance extraction fails, continue without it
+            pass
+            
+        return feature_importance
+
     def cross_validate(self, n_splits: int = 5, test_size: int = 1, **fit_kwargs) -> Dict[str, Any]:
         """Perform cross-validation with prediction saving."""
         fold_results = []
+        feature_importances = []
         splits = self.dataset.get_splits(n_splits, test_size)
         
         for fold_idx, (train_indices, val_indices) in enumerate(splits):
@@ -364,6 +407,11 @@ class ExtendedCrossValidator(CrossValidator):
             
             # Train model
             history = self.model.fit(train_data, val_data, **fit_kwargs)
+            
+            # Extract feature importance from fitted model
+            fold_importance = self._extract_feature_importance(self.model)
+            if fold_importance:
+                feature_importances.append(fold_importance)
             
             # Evaluate
             y_pred = self.model.predict(val_data)
@@ -378,8 +426,27 @@ class ExtendedCrossValidator(CrossValidator):
             metrics = MetricsCalculator.calculate_metrics(y_true, y_pred)
             metrics['fold'] = fold_idx
             fold_results.append(metrics)
+        
+        # Aggregate feature importances across folds
+        aggregated_importance = {}
+        if feature_importances:
+            # Get all unique feature names
+            all_features = set()
+            for importance in feature_importances:
+                all_features.update(importance.keys())
             
-        return self._aggregate_results(fold_results)
+            # Average importance across folds
+            for feature in all_features:
+                values = [importance.get(feature, 0.0) for importance in feature_importances]
+                aggregated_importance[feature] = float(np.mean(values))
+        
+        results = self._aggregate_results(fold_results)
+        
+        # Add feature importance to results if available
+        if aggregated_importance:
+            results['feature_importance'] = aggregated_importance
+            
+        return results
 
 
 def create_all_models() -> Dict[str, Dict[str, Any]]:
@@ -546,7 +613,7 @@ def create_models_with_hyperparameters(analysis_mode: str = 'single_config',
         
         # Generate hyperparameter variations for key models
         for base_model, param_grid in config_obj.hyperparameter_grids.items():
-            if base_model not in param_grid:
+            if not param_grid:  # Skip if no parameters defined for this model
                 continue
                 
             # Generate all combinations of hyperparameters
@@ -897,7 +964,9 @@ def run_evaluation_with_predictions(
             
             # Save model summary
             if config_obj.save_predictions:
-                saver.save_model_summary(model_name, cv_results, model_config, training_time)
+                # Extract feature importance from cv_results if available
+                feature_importance = cv_results.get('feature_importance', None)
+                saver.save_model_summary(model_name, cv_results, model_config, training_time, feature_importance)
             
             # Store results
             results[model_name] = {

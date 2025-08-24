@@ -6,6 +6,8 @@
 *.lintr*
 time-series-predictor/experiments/outputs/*
 *.png
+*.md
+*.psd
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

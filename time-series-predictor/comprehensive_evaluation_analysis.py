@@ -461,49 +461,40 @@ class PredictionAnalyzer:
         """Create comprehensive model comparison plots."""
         performance_summary = self.create_performance_summary()
         
-        # 1. Model performance ranking
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        # Model performance ranking - MAE comparison
+        plt.rcParams.update({'font.size': 24})  # Set base font size to match feature importance graphs
+        fig, ax = plt.subplots(figsize=(14, 12))  # Square shape for better visual impact
         
         # MAE comparison
-        ax = axes[0]
         models = performance_summary['model'].values
-        maes = performance_summary['mae_mean'].values
+        maes = performance_summary['mae_mean'].values 
         mae_stds = performance_summary['mae_std'].values
-        
-        colors = plt.cm.viridis(np.linspace(0, 1, len(models)))
+
+        baseline_color = '#FDB515'  # orange
+        other_color = '#EF3A47'  # red
+        colors = [baseline_color if model in ['adams_baseline_50', 'adams_baseline_60', 'adams_baseline_70', 'median_all', 'median_no_zeros', 'mean_no_zeros', 'average_all', 'naive_forecast'] else other_color 
+                 for model in models]
+
         bars = ax.bar(range(len(models)), maes, yerr=mae_stds, capsize=5, color=colors, alpha=0.8)
         ax.set_xticks(range(len(models)))
-        ax.set_xticklabels(models, rotation=45, ha='right')
-        ax.set_ylabel('Mean Absolute Error')
-        ax.set_title('Model Performance Comparison (MAE)')
+        ax.set_xticklabels(models, rotation=45, ha='right', fontsize=24)  # Match feature importance fontsize
+        ax.set_ylabel('Mean Absolute Error (MAE)', fontsize=28, fontweight='bold')  # Match feature importance label style
+        ax.set_title('Model Performance Comparison', fontsize=28, fontweight='bold', pad=40)  # Match feature importance title style
         ax.grid(True, alpha=0.3)
         
-        # RMSE comparison
-        ax = axes[1]
-        rmses = performance_summary['rmse_mean'].values
-        rmse_stds = performance_summary['rmse_std'].values
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor=baseline_color, alpha=0.8, label='Baseline Models'),
+            Patch(facecolor=other_color, alpha=0.8, label='Advanced Models')
+        ]
+        ax.legend(handles=legend_elements, loc='upper center', frameon=True, fancybox=True, shadow=True, fontsize=24)
         
-        bars = ax.bar(range(len(models)), rmses, yerr=rmse_stds, capsize=5, color=colors, alpha=0.8)
-        ax.set_xticks(range(len(models)))
-        ax.set_xticklabels(models, rotation=45, ha='right')
-        ax.set_ylabel('Root Mean Squared Error')
-        ax.set_title('Model Performance Comparison (RMSE)')
-        ax.grid(True, alpha=0.3)
-        
-        # R² comparison
-        ax = axes[2]
-        r2s = performance_summary['r2_mean'].values
-        r2_stds = performance_summary['r2_std'].values
-        
-        bars = ax.bar(range(len(models)), r2s, yerr=r2_stds, capsize=5, color=colors, alpha=0.8)
-        ax.set_xticks(range(len(models)))
-        ax.set_xticklabels(models, rotation=45, ha='right')
-        ax.set_ylabel('R² Score')
-        ax.set_title('Model Performance Comparison (R²)')
-        ax.grid(True, alpha=0.3)
-        
+        # Set axis tick label sizes to match feature importance
+        ax.tick_params(axis='both', which='major', labelsize=24)
+
         plt.tight_layout()
-        plt.savefig(output_dir / f'model_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / f'model_comparison_{timestamp}.png', dpi=300, bbox_inches='tight', facecolor='white')
         plt.close()
         
         # 2. Performance by category
@@ -735,7 +726,7 @@ class PredictionAnalyzer:
         
         # Focus on specific features of interest (including new class-level and prior achievement features)
         specific_features = [
-            'student_learning_rate', 'student_ability', 'avg_difficulty',  # Original key features
+            'student_learning_rate', 'student_ability', 'current_week_difficulty',  # Original key features
             'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
             'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
             'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
@@ -743,6 +734,27 @@ class PredictionAnalyzer:
         self._analyze_specific_features(df_importance, specific_features, output_dir, timestamp)
         
         print(f"✅ Feature importance analysis completed")
+    
+    def _normalize_feature_importance(self, importance_dict: Dict[str, float]) -> Dict[str, float]:
+        """
+        Normalize feature importance using sum-to-one normalization.
+        
+        This ensures fair comparison across different model types (tree-based vs linear).
+        Tree-based models naturally sum to 1.0, while linear model coefficients can be any scale.
+        """
+        if not importance_dict or all(v == 0 for v in importance_dict.values()):
+            return importance_dict
+        
+        # Calculate total importance (use absolute values for proper normalization)
+        total_importance = sum(abs(v) for v in importance_dict.values())
+        
+        if total_importance > 0:
+            return {
+                feature: abs(importance) / total_importance 
+                for feature, importance in importance_dict.items()
+            }
+        else:
+            return importance_dict
     
     def _extract_feature_importance_data(self):
         """Extract feature importance data from saved results."""
@@ -757,7 +769,10 @@ class PredictionAnalyzer:
                 if 'feature_importance' in summary:
                     importance_dict = summary['feature_importance']
                     
-                    for feature_name, importance in importance_dict.items():
+                    # Apply normalization for fair comparison across model types
+                    normalized_importance = self._normalize_feature_importance(importance_dict)
+                    
+                    for feature_name, importance in normalized_importance.items():
                         feature_importance_data.append({
                             'model': model_name,
                             'feature': feature_name,
@@ -778,7 +793,10 @@ class PredictionAnalyzer:
                 for key, value in model_results.items():
                     if 'feature' in key.lower() and 'importance' in key.lower():
                         if isinstance(value, dict):
-                            for feature_name, importance in value.items():
+                            # Apply normalization for fair comparison across model types
+                            normalized_importance = self._normalize_feature_importance(value)
+                            
+                            for feature_name, importance in normalized_importance.items():
                                 feature_importance_data.append({
                                     'model': model_name,
                                     'feature': feature_name,
@@ -855,14 +873,97 @@ class PredictionAnalyzer:
             fill_value=0
         )
         
-        # 1. Advanced heatmap with top features across all models
+        # 1. Overall feature importance ranking (aggregated across all models)
+        self._create_aggregated_feature_ranking_chart(df_importance, output_dir, timestamp)
+        
+        # 2. Advanced heatmap with top features across all models
         self._create_advanced_heatmap(pivot_data, output_dir, timestamp)
         
-        # 2. Feature importance comparison bar charts
+        # 3. Feature importance comparison bar charts
         self._create_feature_comparison_charts(df_importance, output_dir, timestamp)
         
-        # 3. Model comparison by feature type
+        # 4. Model comparison by feature type
         self._create_model_feature_type_analysis(df_importance, output_dir, timestamp)
+    
+    def _create_aggregated_feature_ranking_chart(self, df_importance: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Create horizontal bar chart showing overall feature importance ranking across all models."""
+        
+        print("Creating aggregated feature importance ranking chart...")
+        
+        # Calculate mean importance across all models for each feature
+        feature_rankings = df_importance.groupby('feature')['importance'].agg([
+            'mean', 'std', 'count'
+        ]).round(4)
+        
+        # Sort by mean importance (descending) and get top 25
+        feature_rankings = feature_rankings.sort_values('mean', ascending=False)
+        top_features = feature_rankings.head(25)
+        
+        # Create horizontal bar chart
+        fig, ax = plt.subplots(figsize=(14, 9))
+        
+        # Define colors for different feature types
+        feature_colors = []
+        specific_features = [
+            'student_learning_rate', 'student_ability', 'current_week_difficulty',  # Original key features
+            'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
+            'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
+            'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
+        ]
+        
+        for feature in top_features.index:
+            if any(spec_feat in feature for spec_feat in specific_features):
+                feature_colors.append('#00008B')  # Bright blue for key features
+            else:
+                feature_colors.append('#5DADE2')  # Light blue for other features
+        
+        # Create horizontal bars
+        y_pos = np.arange(len(top_features))
+        bars = ax.barh(y_pos, top_features['mean'], color=feature_colors, alpha=0.8)
+        
+        # Customize the plot
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(top_features.index, fontsize=10)
+        ax.set_xlabel('Average Importance Across All Models', fontsize=12, fontweight='bold')
+        ax.set_title('Overall Feature Importance Ranking\n(Aggregated Across All Models)', 
+                    fontsize=14, fontweight='bold', pad=40)
+        
+        # Add value labels on bars
+        for i, (bar, importance) in enumerate(zip(bars, top_features['mean'])):
+            width = bar.get_width()
+            ax.text(width + 0.001, bar.get_y() + bar.get_height()/2, 
+                   f'{importance:.3f}', ha='left', va='center', fontsize=9, fontweight='bold')
+        
+        # Add grid for better readability
+        ax.grid(True, alpha=0.3, axis='x')
+        ax.set_axisbelow(True)
+        
+        # Invert y-axis to have highest importance at top (like reference image)
+        ax.invert_yaxis()
+        
+        # Add legend for feature types
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#2E86C1', alpha=0.8, label='Key Student Features'),
+            Patch(facecolor='#5DADE2', alpha=0.8, label='Other Features')
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(0, 1.02), frameon=True, fancybox=True, shadow=True)
+        
+        # Set tight layout
+        plt.tight_layout()
+        
+        # Save the plot
+        plt.savefig(output_dir / f'aggregated_feature_importance_ranking_{timestamp}.png', 
+                   dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        # Also save the ranking data to CSV
+        ranking_with_stats = top_features.copy()
+        ranking_with_stats['rank'] = range(1, len(ranking_with_stats) + 1)
+        ranking_with_stats = ranking_with_stats[['rank', 'mean', 'std', 'count']]
+        ranking_with_stats.to_csv(output_dir / f'aggregated_feature_importance_ranking_{timestamp}.csv')
+        
+        print(f"📊 Aggregated feature importance ranking chart saved")
         
     def _create_advanced_heatmap(self, pivot_data: pd.DataFrame, output_dir: Path, timestamp: str):
         """Create advanced heatmap showing top features across all models."""
@@ -874,20 +975,19 @@ class PredictionAnalyzer:
         # Filter to top features
         heatmap_data = pivot_data.loc[top_features]
         
-        # Normalize each model's importance to 0-1 scale for fair comparison
+        # Use the data as-is since feature importance is already normalized via sum-to-one normalization
+        # This maintains the relative importance within each model while allowing cross-model comparison
         normalized_data = heatmap_data.copy()
-        for col in normalized_data.columns:
-            max_val = normalized_data[col].max()
-            if max_val > 0:
-                normalized_data[col] = normalized_data[col] / max_val
         
         # Create the plot
-        fig, ax = plt.subplots(figsize=(12, 10))
+        fig, ax = plt.subplots(figsize=(14, 9))
         
         # Highlight specific features of interest (including new features)
         specific_features = [
-            'student_learning_rate', 'student_ability', 'avg_difficulty',
-            'performance_vs_class_mean', 'class_percentile_rank', 'starting_ability_quartile'
+            'student_learning_rate', 'student_ability', 'current_week_difficulty',  # Original key features
+            'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
+            'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
+            'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
         ]
         
         # Create color map for y-axis labels
@@ -939,9 +1039,10 @@ class PredictionAnalyzer:
         
         # Focus on key features (including new class-level and prior achievement features)
         specific_features = [
-            'student_learning_rate', 'student_ability', 'avg_difficulty',  # Original key features
-            'performance_vs_class_mean', 'class_percentile_rank',  # Class comparison features
-            'starting_ability_quartile', 'performance_consistency_score'  # Prior achievement features
+            'student_learning_rate', 'student_ability', 'current_week_difficulty',  # Original key features
+            'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
+            'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
+            'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
         ]
         
         # Find features that contain our key terms
@@ -1199,9 +1300,10 @@ class PredictionAnalyzer:
         # Create summary
         summary_data = []
         specific_features = [
-            'student_learning_rate', 'student_ability', 'avg_difficulty',  # Original key features
-            'performance_vs_class_mean', 'class_percentile_rank',  # Class comparison features  
-            'starting_ability_quartile'  # Prior achievement features
+            'student_learning_rate', 'student_ability', 'current_week_difficulty',  # Original key features
+            'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
+            'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
+            'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
         ]
         
         for model, top_features in model_top_features.items():
@@ -1704,6 +1806,8 @@ class PredictionAnalyzer:
             f.write("- `model_comparison.png`: Performance comparison charts\n")
             f.write("- `performance_by_category.png`: Category-wise performance analysis\n\n")
             f.write("### Advanced Feature Importance Analysis\n")
+            f.write("- `aggregated_feature_importance_ranking.png`: Overall feature importance ranking across all models (horizontal bar chart)\n")
+            f.write("- `aggregated_feature_importance_ranking.csv`: Aggregated ranking data with statistics\n")
             f.write("- `advanced_feature_importance_heatmap.png`: Top 25 features with normalized importance and color coding\n")
             f.write("- `key_features_comparison.png`: Comparison of key student features across models\n")
             f.write("- `feature_importance_by_category.png`: Average importance by feature category\n")
@@ -1790,6 +1894,120 @@ class PredictionAnalyzer:
         
         print(f"✅ Window and architecture analysis saved")
         return combination_df
+    
+    def create_learning_curves_from_base_dir(self, base_dir: str, window_sizes: List[int], output_dir: Path, timestamp: str):
+        """Create learning curves showing how model performance varies across different window sizes."""
+        print("Creating learning curves across window sizes...")
+        
+        # Collect results from multiple window directories
+        all_results = []
+        base_path = Path(base_dir)
+        
+        for window_size in window_sizes:
+            # Try to find the window directory (flexible naming)
+            window_patterns = [
+                f"*w{window_size}_*",
+                f"*window{window_size}_*", 
+                f"*_{window_size}_*"
+            ]
+            
+            window_dir = None
+            for pattern in window_patterns:
+                matching_dirs = list(base_path.glob(pattern))
+                if matching_dirs:
+                    window_dir = matching_dirs[0]  # Take first match
+                    break
+            
+            if window_dir and window_dir.exists():
+                try:
+                    # Load results from this window
+                    analyzer = PredictionAnalyzer(str(window_dir))
+                    performance_summary = analyzer.create_performance_summary()
+                    
+                    # Add window size information
+                    performance_summary['window_size'] = window_size
+                    all_results.append(performance_summary)
+                    print(f"✅ Loaded results for window size {window_size}")
+                    
+                except Exception as e:
+                    print(f"⚠️  Could not load results for window size {window_size}: {e}")
+            else:
+                print(f"⚠️  No directory found for window size {window_size}")
+        
+        if len(all_results) < 2:
+            print("⚠️  Need at least 2 window sizes for learning curves. Skipping...")
+            return
+        
+        # Combine all results
+        df_results = pd.concat(all_results, ignore_index=True)
+        
+        # Create learning curves plot
+        self.create_learning_curves(df_results, output_dir, timestamp)
+    
+    def create_learning_curves(self, df_results: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Create learning curves plot from combined results DataFrame."""
+        
+        if 'window_size' not in df_results.columns:
+            print("⚠️  No window size information available for learning curves")
+            return
+        
+        plt.rcParams.update({'font.size': 24})  # Match the formatting style
+        fig, ax = plt.subplots(figsize=(12, 10))  # Wider than tall for better readability
+        
+        # Plot learning curves for all models
+        models_plotted = 0
+        for model in df_results['model'].unique():
+            model_data = df_results[df_results['model'] == model].sort_values('window_size')
+            
+            if len(model_data) > 1:  # Only plot if we have multiple window sizes
+                # Specific colors for LSTM and LASSO, baseline color for others
+                if model == 'lstm':
+                    color = '#009647'  # Green for LSTM
+                elif model == 'lasso':
+                    color = '#008F91'  # Teal for LASSO
+                elif model in ['adams_baseline_50', 'adams_baseline_60', 'adams_baseline_70', 
+                              'median_all', 'median_no_zeros', 'mean_no_zeros', 
+                              'average_all', 'naive_forecast']:
+                    color = '#FDB515'  # Orange for baselines
+                else:
+                    color = '#EF3A47'  # Red for other models
+                
+                ax.plot(model_data['window_size'], model_data['mae_mean'], 
+                       marker='o', label=model, alpha=0.8, linewidth=3, markersize=8, color=color)
+                models_plotted += 1
+        
+        ax.set_xlabel('Window Size (weeks)', fontsize=28, fontweight='bold')
+        ax.set_ylabel('Mean Absolute Error (MAE)', fontsize=28, fontweight='bold')
+        ax.set_title('Model Learning Curves\n(Performance vs Window Size)', fontsize=28, fontweight='bold', pad=40)
+        
+        # Add emphasis on crossover point at window 18
+        crossover_window = 18
+        # Add a dot at the crossover point 
+        crossover_y = 3.6  # Approximate MAE at crossover point
+        ax.scatter(crossover_window, crossover_y, color='red', s=200, zorder=5)
+        ax.text(crossover_window, crossover_y + 0.3, 'performance_crossover', 
+               fontsize=18, fontweight='bold', color='red', ha='center', va='bottom')
+        
+        # Only show legend if we have a reasonable number of models - center position
+        if models_plotted <= 15:
+            ax.legend(loc='center', fontsize=20, frameon=True, fancybox=True, shadow=True, 
+                     bbox_to_anchor=(0.5, 0.85))
+        else:
+            # Too many models, just show a note
+            ax.text(0.98, 0.98, f'{models_plotted} models plotted', transform=ax.transAxes, 
+                   ha='right', va='top', fontsize=20, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='both', which='major', labelsize=24)
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / f'learning_curves_{timestamp}.png', dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"📊 Learning curves saved: {models_plotted} models plotted across window sizes")
+        
+        # Also save the data
+        df_results.to_csv(output_dir / f'learning_curves_data_{timestamp}.csv', index=False)
     
     def _analyze_feature_consistency(self, df_importance: pd.DataFrame, output_dir: Path, timestamp: str):
         """Analyze feature consistency across models (migrated from feature_importance_analysis.py)."""
@@ -1932,3 +2150,67 @@ class PredictionAnalyzer:
         plt.close()
         
         print(f"📊 Feature consistency visualization saved")
+
+
+def create_learning_curves_analysis(base_dir: str, window_sizes: List[int], output_dir: Optional[str] = None):
+    """
+    Standalone function to create learning curves from multiple window results.
+    
+    Args:
+        base_dir: Directory containing multiple window result folders
+        window_sizes: List of window sizes to analyze (e.g., [1, 6, 11, 16, 21, 26])
+        output_dir: Directory to save learning curves (default: base_dir/learning_curves_analysis)
+    
+    Example:
+        create_learning_curves_analysis(
+            base_dir='evaluation_outputs_after_milestone_2_single_config_with_features_copy',
+            window_sizes=[1, 6, 11, 16, 21, 26]
+        )
+    """
+    from datetime import datetime
+    
+    base_path = Path(base_dir)
+    if output_dir is None:
+        output_dir = base_path / 'learning_curves_analysis'
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    print(f"🔍 Creating learning curves analysis...")
+    print(f"📁 Base directory: {base_dir}")
+    print(f"📊 Window sizes: {window_sizes}")
+    print(f"💾 Output directory: {output_dir}")
+    
+    # Use a dummy analyzer to access the learning curves methods
+    # Find any window directory to initialize the analyzer
+    sample_window_dir = None
+    for window_size in window_sizes:
+        pattern = f"*w{window_size}_*"
+        matching_dirs = list(base_path.glob(pattern))
+        if matching_dirs:
+            sample_window_dir = matching_dirs[0]
+            break
+    
+    if sample_window_dir is None:
+        print("❌ No window directories found. Cannot create learning curves.")
+        return
+    
+    # Initialize analyzer with sample directory
+    analyzer = PredictionAnalyzer(str(sample_window_dir))
+    
+    # Create learning curves from base directory
+    analyzer.create_learning_curves_from_base_dir(base_dir, window_sizes, output_path, timestamp)
+    
+    print(f"✅ Learning curves analysis complete! Results saved to: {output_path}")
+
+
+if __name__ == "__main__":
+    # Example usage for proficiency results
+    print("🔍 Example: Creating learning curves for proficiency results...")
+    
+    create_learning_curves_analysis(
+        base_dir='evaluation_outputs_after_milestone_2_single_config_with_features_copy',
+        window_sizes=[1, 6, 11, 16, 21, 26]
+    )

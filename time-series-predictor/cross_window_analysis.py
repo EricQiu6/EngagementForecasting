@@ -52,6 +52,47 @@ class CrossWindowAnalyzer:
         
         # Load all window results
         self._load_all_window_results()
+    
+    def _normalize_feature_importance_by_model(self, feature_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize feature importance using sum-to-one normalization per model.
+        
+        This ensures fair comparison across different model types (tree-based vs linear).
+        Applies the same normalization that was added to comprehensive_evaluation_analysis.py.
+        """
+        if feature_df.empty or 'importance' not in feature_df.columns:
+            return feature_df
+        
+        # Apply normalization per model
+        normalized_df = feature_df.copy()
+        
+        if 'model' in feature_df.columns:
+            # Normalize per model
+            for model in feature_df['model'].unique():
+                model_mask = normalized_df['model'] == model
+                model_importances = normalized_df.loc[model_mask, 'importance'].values
+                
+                # Calculate total importance (use absolute values)
+                total_importance = sum(abs(v) for v in model_importances if not pd.isna(v))
+                
+                if total_importance > 0:
+                    # Apply sum-to-one normalization
+                    normalized_df.loc[model_mask, 'importance'] = [
+                        abs(v) / total_importance if not pd.isna(v) else v 
+                        for v in model_importances
+                    ]
+        else:
+            # If no model column, normalize all together
+            importances = normalized_df['importance'].values
+            total_importance = sum(abs(v) for v in importances if not pd.isna(v))
+            
+            if total_importance > 0:
+                normalized_df['importance'] = [
+                    abs(v) / total_importance if not pd.isna(v) else v 
+                    for v in importances
+                ]
+        
+        return normalized_df
         
     def _load_all_window_results(self):
         """Load results from all window directories."""
@@ -104,6 +145,10 @@ class CrossWindowAnalyzer:
                 try:
                     feature_df = pd.read_csv(feature_file)
                     feature_df['window_size'] = window_size
+                    
+                    # Apply normalization to ensure fair comparison across model types
+                    feature_df = self._normalize_feature_importance_by_model(feature_df)
+                    
                     result['feature_importance'] = feature_df
                 except Exception as e:
                     print(f"⚠️  Warning: Could not load feature importance for window {window_size}: {e}")
@@ -150,7 +195,7 @@ class CrossWindowAnalyzer:
         
         if feature_records:
             self.feature_importance_data = pd.concat(feature_records, ignore_index=True)
-            print(f"📊 Consolidated feature importance: {len(self.feature_importance_data)} records")
+            print(f"📊 Consolidated feature importance: {len(self.feature_importance_data)} records (normalized)")
         else:
             print("⚠️  No feature importance data found across windows")
     
@@ -185,6 +230,11 @@ class CrossWindowAnalyzer:
             print("\n3. Analyzing feature importance evolution...")
             feature_evolution = self.analyze_feature_importance_evolution(output_dir, timestamp)
             results['feature_evolution'] = feature_evolution
+            
+            # 3b. Aggregated Feature Importance Ranking (across all windows)
+            print("\n3b. Creating aggregated feature importance ranking across all windows...")
+            aggregated_ranking = self.create_aggregated_feature_ranking_across_windows(output_dir, timestamp)
+            results['aggregated_feature_ranking'] = aggregated_ranking
         else:
             print("\n3. Skipping feature importance evolution (no data available)")
         
@@ -396,6 +446,96 @@ class CrossWindowAnalyzer:
             }
         
         return {}
+    
+    def create_aggregated_feature_ranking_across_windows(self, output_dir: Path, timestamp: str) -> Dict[str, Any]:
+        """Create horizontal bar chart showing feature importance ranking aggregated across all windows."""
+        
+        print("Creating aggregated feature importance ranking across all windows...")
+        
+        if self.feature_importance_data.empty:
+            print("⚠️  No feature importance data available for ranking")
+            return {}
+        
+        # Calculate mean importance across all windows and models for each feature
+        feature_rankings = self.feature_importance_data.groupby('feature')['importance'].agg([
+            'mean', 'std', 'count'
+        ]).round(4)
+        
+        # Sort by mean importance (descending) and get top 5
+        feature_rankings = feature_rankings.sort_values('mean', ascending=False)
+        top_features = feature_rankings.head(5)
+        
+        # Create horizontal bar chart
+        plt.rcParams.update({'font.size': 24})
+        fig, ax = plt.subplots(figsize=(14, 9))
+        
+        # Define colors for different feature types
+        feature_colors = []
+        specific_features = [
+            'student_learning_rate', 'student_ability', 'current_week_difficulty',  # Original key features
+            'performance_vs_class_mean_prof', 'performance_vs_class_mean_mins',  # Class comparison features
+            'class_percentile_rank_prof', 'class_percentile_rank_mins',  # Peer ranking features
+            'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'  # Prior achievement features
+        ]
+        
+        for feature in top_features.index:
+            if any(spec_feat in feature for spec_feat in specific_features):
+                feature_colors.append('#EF3A47')  # red for key features
+            else:
+                feature_colors.append('#FDB515')  # orange for other features
+        
+        # Create horizontal bars
+        y_pos = np.arange(len(top_features))
+        bars = ax.barh(y_pos, top_features['mean'], color=feature_colors, alpha=0.8)
+        
+        # Customize the plot
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(top_features.index, fontsize=24)
+        ax.set_xlabel('Average Normalized Importance', fontsize=28, fontweight='bold')
+        ax.set_title('Feature Importance Ranking Top 5\n(Aggregated Across All Window Sizes & Models)', 
+                    fontsize=28, fontweight='bold', pad=40)
+        
+        # Add value labels on bars
+        for i, (bar, importance) in enumerate(zip(bars, top_features['mean'])):
+            width = bar.get_width()
+            ax.text(width + 0.001, bar.get_y() + bar.get_height()/2, 
+                   f'{importance:.3f}', ha='left', va='center', fontsize=24, fontweight='bold')
+        
+        # Add grid for better readability
+        ax.grid(True, alpha=0.3, axis='x')
+        ax.set_axisbelow(True)
+        
+        # Invert y-axis to have highest importance at top
+        ax.invert_yaxis()
+        
+        # Add legend for feature types
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#EF3A47', alpha=0.8, label='Key Proposed Features'),
+            Patch(facecolor='#FDB515', alpha=0.8, label='Other Features')
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(0, 1.02), frameon=True, fancybox=True, shadow=True)
+        
+        # Set tight layout
+        plt.tight_layout()
+        
+        # Save the plot
+        plt.savefig(output_dir / f'cross_window_aggregated_feature_ranking_{timestamp}.png', 
+                   dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        # Also save the ranking data to CSV
+        ranking_with_stats = top_features.copy()
+        ranking_with_stats['rank'] = range(1, len(ranking_with_stats) + 1)
+        ranking_with_stats = ranking_with_stats[['rank', 'mean', 'std', 'count']]
+        ranking_with_stats.to_csv(output_dir / f'cross_window_aggregated_feature_ranking_{timestamp}.csv')
+        
+        print(f"📊 Cross-window aggregated feature importance ranking chart saved")
+        
+        return {
+            'ranking_data': ranking_with_stats,
+            'top_features': top_features
+        }
     
     def compute_optimal_window_recommendations(self, output_dir: Path, timestamp: str) -> Dict[str, Any]:
         """Compute optimal window size recommendations based on various criteria."""
@@ -813,6 +953,8 @@ class CrossWindowAnalyzer:
             
             if not self.feature_importance_data.empty:
                 f.write(f"### Feature Importance Analysis\n")
+                f.write(f"- `cross_window_aggregated_feature_ranking_{timestamp}.png`: Overall feature importance ranking across all windows (horizontal bar chart)\n")
+                f.write(f"- `cross_window_aggregated_feature_ranking_{timestamp}.csv`: Aggregated ranking data with statistics\n")
                 f.write(f"- `feature_importance_trends_{timestamp}.csv`: Feature importance trends\n")
                 f.write(f"- `features_trending_up_{timestamp}.csv`: Features with increasing importance\n")
                 f.write(f"- `features_trending_down_{timestamp}.csv`: Features with decreasing importance\n")
@@ -826,9 +968,9 @@ def main():
     """Run cross-window analysis on proficiency prediction results."""
     
     # Configuration
-    base_dir = "evaluation_outputs_after_milestone_2_single_config_with_features"
+    base_dir = "evaluation_outputs_after_milestone_2_single_config_with_features_copy"
     window_sizes = [1, 6, 11, 16, 21, 26]
-    output_dir = "cross_window_analysis_results"
+    output_dir = "cross_window_analysis_results_on_evaluation_outputs_after_milestone_2_single_config_with_features_copy"
     
     print("🔍 CROSS-WINDOW ANALYSIS FOR PROFICIENCY PREDICTION")
     print("="*60)

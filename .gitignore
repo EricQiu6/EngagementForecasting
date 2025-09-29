@@ -1,5 +1,13 @@
 # Custom
 *.tex
+*/afm_outputs*/
+*.txt
+*.html
+*.lintr*
+time-series-predictor/experiments/outputs/*
+*.png
+*.md
+*.psd
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -188,7 +196,6 @@ cython_debug/
 *.pth
 *.ckpt
 *.weights
-models/
 checkpoints/
 
 # Experiment tracking

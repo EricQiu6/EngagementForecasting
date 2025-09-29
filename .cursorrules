@@ -1,0 +1,183 @@
+# Goal-Setting Recommendation Algorithm - Cursor Rules
+
+## Project Overview
+This project implements a goal-setting recommendation algorithm that combines data analysis pipelines with time-series prediction models. The system analyzes student performance data to provide personalized goal recommendations.
+
+## Project Structure
+
+### `/data-analysis/`
+- **Language**: R
+- **Purpose**: Data preprocessing, feature engineering, and AFM (Additive Factor Model) analysis
+- **Key Files**:
+  - `afm_pipeline.R`: Main AFM processing pipeline
+  - `combined_rolling_window.Rmd`: Rolling window analysis
+  - `student_week_aggregation.R`: Aggregates student data by week
+  - `run_combined_pipeline.R`, `run_rolling_window_pipeline.R`: Pipeline runners
+
+### `/time-series-predictor/`
+- **Language**: Python
+- **Purpose**: Time-series prediction framework for student performance
+- **Structure**:
+  - `src/framework/`: Core framework implementation
+    - `core/`: Base classes, data handling, schema definitions
+    - `models/`: Model implementations (baselines, neural nets, mixed effects)
+    - `adapters/`: Model adapters for different frameworks (sklearn, pytorch, mixed effects)
+    - `utils/`: Utility functions
+  - `experiments/`: Experiment scripts and analysis
+  - `comprehensive_evaluation*.py`: Main evaluation scripts
+
+## Key Technical Details
+
+### Data Pipeline
+1. **AFM Processing**: Uses R to run Additive Factor Models for student skill assessment
+2. **Feature Engineering**: Includes temporal features, gap analysis, and rolling window computations
+3. **Student-Week Aggregation**: Aggregates data at student-week level for time-series modeling
+
+### Modeling Framework
+- **Mixed Effects Models**: Handles student-specific random effects
+- **Zero-Inflated Models**: Accounts for excess zeros in student performance data
+- **Goal-Based Predictors**: Incorporates student goals into predictions
+- **Neural Networks**: DLinear and other architectures for time-series prediction
+
+### Important Patterns
+
+#### Python Code Style
+- Use type hints for all function parameters and returns
+- Follow PEP 8 conventions
+- Docstrings should include Args, Returns, and Examples sections
+- Prefer composition over inheritance for model adapters
+
+#### R Code Style
+- Use tidyverse conventions where applicable
+- Document functions with roxygen2-style comments
+- Maintain consistent naming: snake_case for variables, functions
+
+#### Model Integration Pattern
+```python
+# Example adapter pattern
+class ModelAdapter(BaseAdapter):
+    def __init__(self, model_params: Dict[str, Any]):
+        self.model = self._build_model(model_params)
+    
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        # Implementation
+        pass
+    
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        # Implementation
+        pass
+```
+
+## Common Tasks and Guidelines
+
+### Adding a New Model
+1. Create model class in `src/framework/models/`
+2. Create adapter in `src/framework/adapters/` if needed
+3. Register in `__init__.py` files
+4. Add to evaluation scripts in `experiments/`
+
+### Running Experiments
+1. Use the comprehensive evaluation scripts as templates
+2. Ensure proper cross-validation setup (GroupKFold by student_id)
+3. Save results in structured format for analysis
+
+### Data Processing
+1. Always handle temporal gaps appropriately (see TEMPORAL_GAP_HANDLING_STRATEGIES.md)
+2. Use rolling windows for feature computation when specified
+3. Maintain student_id consistency across pipelines
+
+## Key Conventions
+
+### File Naming
+- Python: `snake_case.py`
+- R: `snake_case.R` or `Title-Case.Rmd` for notebooks
+- Documentation: `UPPERCASE_TITLE.md` for important docs
+
+### Import Organization
+```python
+# Standard library
+import os
+import sys
+from typing import Dict, List, Optional
+
+# Third-party
+import numpy as np
+import pandas as pd
+from sklearn.base import BaseEstimator
+
+# Local
+from src.framework.core import BaseModel
+from src.framework.utils import device
+```
+
+### Error Handling
+- Use specific exception types
+- Always log errors with context
+- Provide meaningful error messages for data validation
+
+## Critical Warnings
+
+1. **Student ID Handling**: Always use GroupKFold or similar to prevent data leakage between train/test
+2. **Temporal Ordering**: Maintain chronological order in time-series data
+3. **Mixed Effects**: Use proper mixed effects implementation (see MIXED_EFFECTS_CORRECT_APPROACH.md)
+4. **Zero Inflation**: Many students have zero performance; models should account for this
+
+## Testing Guidelines
+
+### Unit Tests
+- Test individual components in isolation
+- Mock external dependencies
+- Focus on edge cases and error conditions
+
+### Integration Tests
+- Test full pipeline from data loading to prediction
+- Verify model adapter interfaces
+- Check cross-validation setup
+
+### Performance Benchmarks
+- Track model performance metrics (RMSE, MAE, R²)
+- Compare against baseline models
+- Document computational requirements
+
+## Documentation Standards
+
+### Code Documentation
+- All public functions must have docstrings
+- Complex algorithms should have inline comments
+- Update README files when adding major features
+
+### Experiment Documentation
+- Record all hyperparameters
+- Document data preprocessing steps
+- Include visualizations of results
+
+## Dependencies and Environment
+
+### Python Environment
+- Python 3.8+
+- Key packages: pandas, numpy, scikit-learn, pytorch, statsmodels
+- Use requirements.txt or setup.py for dependency management
+
+### R Environment
+- R 4.0+
+- Key packages: tidyverse, lme4, car
+- Document package versions in scripts
+
+## Debugging Tips
+
+1. **Data Issues**: Check for NaN values, inconsistent student IDs, temporal gaps
+2. **Model Convergence**: Monitor loss curves, check for proper initialization
+3. **Memory Issues**: Use batch processing for large datasets
+4. **Performance**: Profile code to identify bottlenecks
+
+## Code Review Checklist
+
+- [ ] Type hints added for Python functions
+- [ ] Docstrings complete and accurate
+- [ ] Error handling implemented
+- [ ] Cross-validation properly set up
+- [ ] Results saved in analyzable format
+- [ ] Documentation updated
+- [ ] No hardcoded paths or credentials
+- [ ] Temporal ordering maintained
+- [ ] Student data leakage prevented 

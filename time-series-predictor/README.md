@@ -1,150 +1,399 @@
-# Time-Series Predictor for Student Goal Recommendation
+# Time Series Prediction Framework
 
-This project implements a baseline forecasting pipeline for predicting student performance in skills-mastered tasks, as specified in the baseline specification document.
+A schema-driven framework for time series prediction supporting both traditional machine learning and deep learning models.
 
-## Project Overview
+## Framework Structure
 
-The goal is to create a learning algorithm that can recommend weekly practice goals for students based on their historical performance data. This baseline implementation focuses on predicting skills-mastered performance using autoregressive modeling.
-
-## Implementation Progress
-
-### ✅ Completed Steps (1-3)
-
-#### Step 1: Choose the target series
-
-- **Target variable**: Skills-mastered (using `proficient` column)
-- **Rationale**: Focus on skill proficiency as the key performance metric
-
-#### Step 2: Load & tidy the data
-
-- **Input**: `exp-static-flexible-anon-2025-05-29.csv` (1,893 rows, 16 columns)
-- **Output**: `data_tidied.csv` (1,893 rows, 3 columns: name, week, proficient)
-- **Processing steps**:
-  - Selected only required columns: `name`, `week`, `proficient`
-  - Sorted by (name, week) and removed duplicates
-  - Analyzed missing weeks within student spans (none found)
-  - Forward-filled missing proficient values (3 missing values handled)
-  - Initial missing values filled with 0 (no skills mastered initially)
-
-#### Step 3: Split chronologically ✨ NEW
-
-- **Per student**: Keep last K=3 weeks as test set, everything before as training
-- **Intelligent K selection**: Analyzed data to recommend K=3 (27.3% test data, ≥5 training weeks)
-- **Results**:
-  - 183 students processed (1 student had insufficient data ≤3 weeks)
-  - Training: 1,341 samples (7.3±1.2 weeks per student)
-  - Testing: 549 samples (exactly 3 weeks per student)
-- **Model-agnostic output**: Clean dictionary format for any ML model
-- **Data integrity**: Zero train/test overlap, perfect chronological separation
-
-### 📊 Data Summary
-
-- **Students**: 184 unique students (183 with sufficient data for split)
-- **Time range**: Week -2 to Week 8 (11 weeks total)
-- **Target variable statistics**:
-  - Mean: 1.32 skills mastered per week
-  - Range: 0-26 skills mastered
-  - Most common: 0-2 skills per week
-- **Split characteristics**:
-  - Training weeks: -2 to 5 (per student basis)
-  - Test weeks: 2 to 8 (last 3 weeks per student)
-  - No temporal leakage between train/test
-
-### 🚧 Next Steps (4-6)
-
-#### Step 4: Add learnable model
-
-- Implement AR(p) autoregressive model via linear regression
-- Fit on stacked training pairs from all students
-- Optimize using MSE (ordinary least squares)
-
-#### Step 5: Evaluate on held-out weeks
-
-- Compute per-student metrics then average:
-  - MAE (robust to outliers)
-  - RMSE (penalizes large errors)
-  - SMAPE (scale-free interpretability)
-
-#### Step 6: Package into ready-to-use function
-
-- Save fitted coefficients
-- Create prediction function: given last t data points, return ŷ\_{t+1}
-
-## Usage
-
-### Setup
-
-```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install pandas numpy scikit-learn
+```
+src/framework/
+├── core/                   # Core framework components
+│   ├── base.py            # Abstract base classes
+│   ├── data.py            # Schema-based dataset implementations
+│   └── schema.py          # Data schema definitions and validation
+├── adapters/              # Model adapters for different frameworks
+│   ├── sklearn_adapter.py # SKLearn model integration
+│   └── pytorch_adapter.py # PyTorch model integration
+├── models/                # Pre-built model implementations
+│   ├── baselines.py       # Simple baseline models
+│   ├── neural_nets.py     # Neural network architectures
+│   ├── student_ability_model.py  # Don't worry about this
+│   └── zero_inflated_model.py    # Don't worry about this
+├── utils/                 # Utility functions
+│   └── device.py          # GPU/CPU device management
+└── config.py              # Configuration management, haven't really tested this
 ```
 
-### Run Steps 1-3
+## Core Idea
 
-```bash
-# Run complete data processing pipeline (Steps 1-3)
-python data_processing.py
+### 1. **Schema**
 
-# Or test the split functionality
-python test_data_split.py
-```
-
-### Use the split data for modeling
+The framework uses data schemas to eliminate hardcoded column names and ambiguous indexing in tensors:
 
 ```python
-from data_processing import split_chronologically
+from src.framework.core.schema import DataSchema, get_schema
 
-# Get the chronologically split data
-result = split_chronologically()
+# Use predefined schemas
+schema = get_schema('student_week')  # For student weekly aggregation data
+schema = get_schema('time_goal')     # For time goal prediction
 
-# Extract components for model training
-train_data = result['train_data']
-test_data = result['test_data']
-target_column = result['target_column']  # 'proficient'
-
-# Use for any machine learning model
-X_train = train_data[['week']]  # Can add more features/lags
-y_train = train_data[target_column]
-X_test = test_data[['week']]
-y_test = test_data[target_column]
+# Or create custom schemas
+custom_schema = DataSchema(
+    student_column='user_id',
+    time_column='timestamp',
+    target_column='performance',
+    feature_columns=['activity', 'duration', 'difficulty']
+)
 ```
 
-## Files
+### 2. **Unified Model Interface**
 
-- `baseline_specification.MD` - Original specification document
-- `experiment_design.tex` - Detailed experimental design and results
-- `exp-static-flexible-anon-2025-05-29.csv` - Raw experimental data
-- `data_processing.py` - **Main implementation script (Steps 1-3)**
-- `test_data_split.py` - Test script demonstrating split functionality
-- `data_tidied.csv` - Processed, cleaned dataset (generated)
-- `README.md` - This documentation
+All models (sklearn, PyTorch, custom) implement the same interface:
 
-## Architecture
+```python
+# All models support the same methods
+model.fit(train_data, val_data)
+predictions = model.predict(test_data)
+params = model.get_params()
+model.save('model.pkl')
+```
 
-The implementation follows the "minimal-input baseline" approach:
+### Adding New Models
 
-- **Input**: Only past weekly performance per student (no goals, demographics, etc.)
-- **Objective**: Exact prediction accuracy via MSE optimization
-- **Model**: Simple AR(p) autoregressive linear regression
-- **Evaluation**: Standard time-series prediction metrics
+#### 1. **Adding a New Baseline Model**
 
-### Data Processing Pipeline
+Create your model in `src/framework/models/baselines.py`:
 
-1. **Load & Tidy**: Clean raw CSV → standardized format
-2. **Chronological Split**: Per-student train/test split preserving temporal order
-3. **Model-Agnostic Output**: Ready for any ML algorithm
+```python
+class MyNewBaseline:
+    """Description of your baseline model."""
 
-This provides a clean baseline for comparison with more sophisticated goal-setting algorithms.
+    def __init__(self, param1=None):
+        self.param1 = param1
+        self.fitted = False
+        self.metadata = None  # For feature metadata
 
-### Key Features
+    def set_feature_metadata(self, metadata):
+        """Receive feature metadata from adapter (optional)."""
+        self.metadata = metadata
 
-- ✅ **No temporal leakage**: Strict chronological separation
-- ✅ **Per-student splitting**: Respects individual student timelines
-- ✅ **Intelligent K selection**: Data-driven test set size
-- ✅ **Model agnostic**: Works with any ML framework
-- ✅ **Data integrity checks**: Automated verification
-- ✅ **Comprehensive documentation**: Example usage included
+    def fit(self, X, y):
+        """Train the model."""
+        # Your training logic here
+        self.fitted = True
+        return self
+
+    def predict(self, X):
+        """Make predictions."""
+        if not self.fitted:
+            raise ValueError("Must fit before predicting")
+        # Your prediction logic here
+        return predictions
+
+    def get_params(self, deep=True):
+        """For sklearn compatibility."""
+        return {'param1': self.param1}
+```
+
+Then add it to your evaluation:
+
+```python
+# In comprehensive_evaluation.py
+algorithms['my_baseline'] = {
+    'model': MyNewBaseline(param1=value),
+    'description': 'My new baseline model',
+    'category': 'baseline'
+}
+```
+
+#### 2. **Adding a New Neural Network Model**
+
+Create your model in `src/framework/models/neural_nets.py`:
+
+```python
+class MyNeuralModel(nn.Module):
+    """Description of your neural model."""
+
+    def __init__(self, input_size, hidden_size=64, dropout=0.2):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, 1)
+        )
+
+    def forward(self, x):
+        # Handle sequence input: (batch_size, seq_len, features)
+        if len(x.shape) == 3:
+            # Use last timestep or apply pooling
+            x = x[:, -1, :]  # Use last timestep
+        return self.layers(x)
+```
+
+Add it to the model factory:
+
+```python
+# In neural_nets.py create_model function
+elif model_type == 'my_neural':
+    return MyNeuralModel(**kwargs)
+```
+
+Use with PyTorchAdapter:
+
+```python
+from src.framework.adapters import PyTorchAdapter
+from src.framework.models.neural_nets import MyNeuralModel
+
+model = PyTorchAdapter(
+    MyNeuralModel(input_size=len(schema.feature_columns)),
+    schema=schema
+)
+```
+
+#### 3. **Adding Domain-Specific Models**
+
+Create a new file `src/framework/models/my_domain_model.py`:
+
+```python
+class MyDomainModel(nn.Module):
+    """Model specific to my domain/use case."""
+
+    def __init__(self, schema: Optional['DataSchema'] = None):
+        super().__init__()
+        self.schema = schema
+
+        # Build feature indices from schema
+        if schema:
+            self.feature_indices = schema.get_feature_indices()
+            # Validate required features
+            required = ['feature1', 'feature2']
+            missing = [f for f in required if f not in self.feature_indices]
+            if missing:
+                raise ValueError(f"Missing features: {missing}")
+
+    def _get_feature_index(self, feature_name: str, fallback: int) -> int:
+        """Get feature index from schema or use fallback."""
+        if self.feature_indices:
+            return self.feature_indices[feature_name]
+        return fallback
+
+    def forward(self, x):
+        # Extract features using schema
+        feature1_idx = self._get_feature_index('feature1', 0)
+        feature2_idx = self._get_feature_index('feature2', 1)
+
+        feature1 = x[:, -1, feature1_idx]  # Latest value
+        feature2 = x[:, :, feature2_idx]   # Full sequence
+
+        # Your model logic here
+        return predictions
+```
+
+### Adding New Data Schemas! Important if more data added to csv
+
+Add new schemas to `src/framework/core/schema.py`:
+
+```python
+# In the SCHEMAS dictionary
+SCHEMAS = {
+    # ... existing schemas ...
+
+    'my_new_schema': DataSchema(
+        student_column='participant_id',
+        time_column='session_number',
+        target_column='outcome_score',
+        feature_columns=[
+            'session_number',
+            'baseline_measure',
+            'intervention_type',
+            'outcome_score'
+        ],
+        time_format='numeric',  # or 'week_string' for '2011-W36' format
+        validation_rules={ # don't worry about this haven't done testing
+            'outcome_score': {'min': 0.0, 'max': 100.0},
+            'baseline_measure': {'min': 0.0}
+        }
+    ),
+}
+```
+
+Use your new schema:
+
+```python
+schema = get_schema('my_new_schema')
+dataset = SchemaBasedTimeSeriesDataset(
+    data_path='my_data.csv',
+# use data-analysis/student_week_aggregations_rolling_new.csv
+    schema=schema
+)
+```
+
+### Adding New Feature Engineering!!! Important right here
+
+Extend the feature engineering in `src/framework/adapters/sklearn_adapter.py`. Note that feature extraction uses the schema system:
+
+```python
+# In the _create_all_features method, add new feature types:
+
+def _create_all_features(self, X_all: np.ndarray) -> np.ndarray:
+    # ... existing feature extraction ...
+
+    # 7. Add your new feature type
+    my_new_features = []
+
+    if 'my_special_column' in self.feature_map:
+        idx = self.feature_map['my_special_column']
+        values = X_all[:, :, idx]
+
+        # Create your features
+        special_feature = np.some_function(values)
+        my_new_features.append(special_feature)
+
+    if my_new_features:
+        new_feature_array = np.column_stack(my_new_features)
+        feature_list.append(new_feature_array)
+
+    # ... rest of method ...
+```
+
+Also update `get_feature_names()` to include your new features:
+
+```python
+def get_feature_names(self):
+    # ... existing feature names ...
+
+    # Add names for your new features
+    if 'my_special_column' in self.feature_map:
+        feature_names.append('my_special_feature')
+```
+
+### Adding New Adapters
+
+Create a new adapter in `src/framework/adapters/`:
+
+```python
+# my_framework_adapter.py
+from ..core.base import TimeSeriesModel
+
+class MyFrameworkAdapter(TimeSeriesModel):
+    """Adapter for integrating MyFramework models."""
+
+    def __init__(self, my_model, schema=None):
+        self.my_model = my_model
+        self.schema = schema
+        self.is_fitted = False
+
+    def fit(self, train_data, val_data=None, **kwargs):
+        # Convert data format if needed
+        X_train, y_train = self._convert_data(train_data)
+
+        # Train using your framework's API
+        self.my_model.train(X_train, y_train)
+        self.is_fitted = True
+
+        return {'status': 'completed'}
+
+    def predict(self, data):
+        X = self._convert_data(data, prediction=True)
+        return self.my_model.predict(X)
+
+    def _convert_data(self, data, prediction=False):
+        # Convert from DataLoader or arrays to your format
+        pass
+```
+
+Add to both `adapters/__init__.py` and `core/__init__.py`:
+
+```python
+# In adapters/__init__.py
+from .my_framework_adapter import MyFrameworkAdapter
+
+__all__ = [..., 'MyFrameworkAdapter']
+
+# In core/__init__.py (if exposing at framework level)
+from ..adapters import MyFrameworkAdapter
+```
+
+## Running Evaluations
+
+### Basic Usage
+
+```python
+# Run evaluation with saved predictions (recommended)
+python comprehensive_evaluation_with_saved_predictions.py
+
+# Run analysis on saved results
+python comprehensive_evaluation_analysis.py --results-dir evaluation_outputs/[experiment_name]
+
+# Run complete pipeline with demo
+python run_analysis_demo.py --target-type minutes_per_week --window-size 8
+
+# Available schemas: legacy, student_week, extended, time_goal, time_goal_extended
+
+# USE time_goal_extended mostly because it matches with the csv used under
+# data-analysis/student_week_aggregations_rolling_new.csv
+```
+
+### Custom Evaluation
+
+```python
+from src.framework.core.schema import get_schema
+from src.framework.core.data import SchemaBasedTimeSeriesDataset
+from src.framework.adapters import SKLearnAdapter
+from sklearn.ensemble import RandomForestRegressor
+
+# Setup
+schema = get_schema('time_goal_extended')
+dataset = SchemaBasedTimeSeriesDataset('../data-analysis/student_week_aggregations_rolling_new.csv', schema)
+
+# Create model
+model = SKLearnAdapter(
+    RandomForestRegressor(n_estimators=100),
+    schema=schema
+)
+
+# Evaluate
+cv = CrossValidator(model, dataset)
+results = cv.cross_validate(n_splits=5)
+```
+
+## Example: Complete Custom Model
+
+adding a new domain-specific model:
+
+```python
+# 1. Define schema
+schema = DataSchema(
+    student_column='user_id',
+    time_column='week',
+    target_column='engagement_score',
+    feature_columns=['week', 'activity_count', 'engagement_score', 'difficulty']
+)
+
+# 2. Create model
+class EngagementPredictor(nn.Module):
+    def __init__(self, schema):
+        super().__init__()
+        self.schema = schema
+        self.feature_indices = schema.get_feature_indices()
+
+        # Simple neural network
+        self.layers = nn.Sequential(
+            nn.Linear(len(schema.feature_columns) * 5, 64),  # 5 timesteps
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, x):
+        batch_size, seq_len, n_features = x.shape
+        x_flat = x.view(batch_size, -1)  # Flatten
+        return self.layers(x_flat)
+
+# 3. Use with adapter
+model = PyTorchAdapter(EngagementPredictor(schema), schema=schema)
+
+# 4. Evaluate
+dataset = SchemaBasedTimeSeriesDataset('data.csv', schema)
+cv = CrossValidator(model, dataset)
+results = cv.cross_validate()
+```

@@ -755,7 +755,9 @@ def create_custom_schema_with_features(base_schema: DataSchema, selected_feature
 def run_evaluation_with_predictions(
     experiment_config: Dict[str, Any],
     config_obj: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG,
-    analysis_mode: str = 'single_config'
+    analysis_mode: str = 'single_config',
+    ablation_excluded_categories: List[str] = None,
+    models_override: Dict[str, Dict[str, Any]] = None
 ):
     """Run comprehensive evaluation with prediction saving using experiment configuration."""
     
@@ -843,39 +845,57 @@ def run_evaluation_with_predictions(
     print(f"  - CV: {cv_config} ({cv_params})")
     print(f"  - Models: {model_set}")
     
-    # Create prediction saver
-    output_dir = f"{config_obj.output_base_dir}/{experiment_name}"
+    # Create prediction saver (add ablation suffixes if applicable)
+    ablation_suffix_dir = ""
+    ablation_suffix_name = ""
+    if ablation_excluded_categories:
+        try:
+            cats_sorted = "-".join(sorted(list(ablation_excluded_categories)))
+        except Exception:
+            cats_sorted = "custom"
+        ablation_suffix_dir = "_ablation"
+        ablation_suffix_name = f"_exclude_{cats_sorted}"
+    output_dir = f"{config_obj.output_base_dir}{ablation_suffix_dir}/{experiment_name}{ablation_suffix_name}"
     saver = PredictionSaver(output_dir)
     saver.save_evaluation_config(evaluation_config)
+    # Save ablation configuration for traceability
+    if ablation_excluded_categories:
+        with open(Path(output_dir) / 'ablation_config.json', 'w') as f:
+            json.dump({
+                'excluded_categories': list(ablation_excluded_categories)
+            }, f, indent=2)
     
-    # Get models based on model set and analysis mode
-    if analysis_mode == 'single_config':
-        all_models = create_all_models()
-        if model_set == 'all' or config_obj.model_sets[model_set] is None:
-            models = all_models
-        else:
-            selected_model_names = config_obj.model_sets[model_set]
-            models = {name: all_models[name] for name in selected_model_names if name in all_models}
+    # Get models based on model set and analysis mode (allow override)
+    if models_override is not None:
+        models = models_override
     else:
-        # Use hyperparameter analysis
-        all_models = create_models_with_hyperparameters(analysis_mode, config_obj)
-        if model_set == 'all' or config_obj.model_sets[model_set] is None:
-            models = all_models
+        if analysis_mode == 'single_config':
+            all_models = create_all_models()
+            if model_set == 'all' or config_obj.model_sets[model_set] is None:
+                models = all_models
+            else:
+                selected_model_names = config_obj.model_sets[model_set]
+                models = {name: all_models[name] for name in selected_model_names if name in all_models}
         else:
-            # Filter hyperparameter models to match model set
-            selected_model_names = config_obj.model_sets[model_set]
-            models = {}
-            
-            # Include baseline/goal-based models as they are
-            for name, config in all_models.items():
-                if name in selected_model_names or config.get('category') in ['baseline', 'goal_based']:
-                    models[name] = config
-                    continue
-                    
-                # Include hyperparameter variants of selected models
-                base_model = config.get('base_model', name)
-                if base_model in selected_model_names:
-                    models[name] = config
+            # Use hyperparameter analysis
+            all_models = create_models_with_hyperparameters(analysis_mode, config_obj)
+            if model_set == 'all' or config_obj.model_sets[model_set] is None:
+                models = all_models
+            else:
+                # Filter hyperparameter models to match model set
+                selected_model_names = config_obj.model_sets[model_set]
+                models = {}
+                
+                # Include baseline/goal-based models as they are
+                for name, config in all_models.items():
+                    if name in selected_model_names or config.get('category') in ['baseline', 'goal_based']:
+                        models[name] = config
+                        continue
+                        
+                    # Include hyperparameter variants of selected models
+                    base_model = config.get('base_model', name)
+                    if base_model in selected_model_names:
+                        models[name] = config
     
     if not models:
         print(f"❌ No models available for model set: {model_set}")
@@ -934,6 +954,10 @@ def run_evaluation_with_predictions(
                 # Create a custom adapter that filters engineered features
                 adapter = EngineeredFeatureFilterAdapter(adapter, schema._target_engineered_features)
             
+            # Apply ablation if requested
+            if ablation_excluded_categories:
+                adapter = FeatureCategoryAblationAdapter(adapter, ablation_excluded_categories)
+
             # Create extended cross-validator
             cv = ExtendedCrossValidator(
                 adapter, dataset, 
@@ -1128,6 +1152,153 @@ class EngineeredFeatureFilterAdapter:
     def __getattr__(self, name):
         """Delegate all other attributes to the base adapter."""
         return getattr(self.base_adapter, name)
+
+
+class FeatureCategoryAblationAdapter:
+    """Adapter wrapper that excludes engineered features by category after creation.
+
+    Categories (aligned with sklearn_adapter feature sections):
+      - current, lags, changes, stats, interactions, gaps, class_peer, prior_achievement
+    """
+    def __init__(self, base_adapter, excluded_categories: List[str]):
+        self.base_adapter = base_adapter
+        self.excluded_categories = set(excluded_categories)
+
+    def _feature_to_category(self, name: str) -> str:
+        n = name.lower()
+        if n.startswith('current_'):
+            return 'current'
+        if '_lag' in n:
+            return 'lags'
+        if n.endswith('_recent_change') or n.endswith('_avg_change'):
+            return 'changes'
+        if n in {'minutes_x_difficulty'}:
+            return 'interactions'
+        if n in {'has_recent_gap', 'weeks_since_last_gap', 'gap_count'} or 'gap' in n:
+            return 'gaps'
+        if n in {
+            'performance_vs_class_mean_prof', 'class_percentile_rank_prof', 'class_improvement_trend_prof',
+            'performance_vs_class_mean_mins', 'class_percentile_rank_mins', 'class_improvement_trend_mins'
+        }:
+            return 'class_peer'
+        if n in {'starting_ability_quartile', 'performance_consistency_score', 'learning_acceleration_capacity'}:
+            return 'prior_achievement'
+        if n in {
+            'minutes_mean', 'minutes_std', 'minutes_range', 'minutes_iqr',
+            'problems_mean', 'problems_sum', 'problems_std',
+            'proficiency_trend', 'proficiency_acceleration'
+        }:
+            return 'stats'
+        return 'stats'
+
+    def _dataloader_to_arrays(self, dataloader):
+        X_full, y = self.base_adapter._dataloader_to_arrays(dataloader)
+        if hasattr(self.base_adapter, 'get_feature_names'):
+            feature_names = self.base_adapter.get_feature_names()
+            if feature_names and len(feature_names) == X_full.shape[1]:
+                keep_indices = []
+                for i, fname in enumerate(feature_names):
+                    cat = self._feature_to_category(fname)
+                    if cat not in self.excluded_categories:
+                        keep_indices.append(i)
+                if keep_indices:
+                    X_filtered = X_full[:, keep_indices]
+                    return X_filtered, y
+                else:
+                    # Excluding everything would be invalid; fall back to full
+                    return X_full, y
+        return X_full, y
+
+    def fit(self, *args, **kwargs):
+        return self.base_adapter.fit(*args, **kwargs)
+
+    def predict(self, data):
+        return self.base_adapter.predict(data)
+
+    def cross_validate(self, *args, **kwargs):
+        return self.base_adapter.cross_validate(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.base_adapter, name)
+
+    # ---- Option A: actually perform filtering during fit/predict for sklearn adapters ----
+    def _get_engineered_feature_names(self):
+        try:
+            if hasattr(self.base_adapter, 'get_feature_names'):
+                return self.base_adapter.get_feature_names()
+        except Exception:
+            pass
+        return None
+
+    def _filter_arrays_by_category(self, X):
+        feature_names = self._get_engineered_feature_names()
+        if feature_names is None or not isinstance(feature_names, list):
+            return X, []
+        if len(feature_names) != X.shape[1]:
+            # Mismatch – cannot safely filter
+            return X, []
+        keep_indices = []
+        removed = []
+        for i, fname in enumerate(feature_names):
+            cat = self._feature_to_category(fname)
+            if cat not in self.excluded_categories:
+                keep_indices.append(i)
+            else:
+                removed.append(fname)
+        if keep_indices:
+            Xf = X[:, keep_indices]
+            return Xf, removed
+        # If everything excluded, fall back to original X to avoid crashing
+        return X, feature_names
+
+    def fit(self, 
+            train_data, 
+            val_data=None, 
+            **kwargs):
+        # Only handle sklearn-style adapters explicitly; otherwise delegate
+        if not hasattr(self.base_adapter, 'sklearn_model'):
+            return self.base_adapter.fit(train_data, val_data, **kwargs)
+        
+        # Convert input to arrays using the base adapter's pipeline
+        try:
+            X_train, y_train = self.base_adapter._dataloader_to_arrays(train_data)
+        except Exception:
+            # Fallback: delegate to base adapter
+            return self.base_adapter.fit(train_data, val_data, **kwargs)
+        
+        # Filter columns
+        Xf, removed = self._filter_arrays_by_category(X_train)
+        
+        # Fit underlying sklearn model directly
+        self.base_adapter.sklearn_model.fit(Xf, y_train)
+        # Mark fitted
+        if hasattr(self.base_adapter, 'is_fitted'):
+            self.base_adapter.is_fitted = True
+        # Optionally store last removed for audit
+        self._last_removed_features = removed
+        return {
+            'train_samples': len(Xf),
+            'feature_dim': Xf.shape[1] if len(Xf.shape) > 1 else 1,
+            'status': 'completed'
+        }
+
+    def predict(self, data):
+        # Only handle sklearn-style adapters explicitly; otherwise delegate
+        if not hasattr(self.base_adapter, 'sklearn_model'):
+            return self.base_adapter.predict(data)
+        
+        try:
+            X, _ = self.base_adapter._dataloader_to_arrays(data)
+        except Exception:
+            # If arrays, attempt direct use
+            if isinstance(data, tuple) and len(data) == 2:
+                X, _ = data
+            else:
+                # Delegate if unknown type
+                return self.base_adapter.predict(data)
+        
+        Xf, _ = self._filter_arrays_by_category(X)
+        return self.base_adapter.sklearn_model.predict(Xf)
 
 
 def analyze_hyperparameter_sensitivity(results_data: Dict[str, Any]) -> pd.DataFrame:

@@ -19,8 +19,8 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
 ```{r}
 DATA_PATH    <- "All_Data_1884_2013_0215_193821.csv"
-AFM_DIR      <- "afm_outputs_steve_dang_100"
-OUTPUT_FILE  <- "steve_dang_100.csv"
+AFM_DIR      <- "afm_outputs"
+OUTPUT_FILE  <- "data.csv"
 
 # Create output directory if it doesn't exist
 if (!dir.exists(AFM_DIR)) {

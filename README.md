@@ -1,4 +1,4 @@
-## Goal-Setting Recommendation Algorithm — End-to-End Pipeline Guide
+## Engagement Forecasting — End-to-End Pipeline Guide
 
 This document explains how data flow, training/evaluation, and analysis fit together to produce some of the paper artifacts and figures.
 
